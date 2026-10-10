@@ -130,6 +130,7 @@ class Config:
     # "Denoiser OI" (Denoiser.exe) for the per-scene post-render denoise flag; empty = disabled.
     denoiser_exe: str = ""
     denoise_timeout_s: float = 600.0
+    denoise_keep_original: bool = False  # True: write <name>_denoised.png beside the render instead of replacing it
 
     # -- derived paths -----------------------------------------------------
     def instance_dir(self, instance: str) -> Path:

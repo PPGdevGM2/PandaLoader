@@ -68,9 +68,10 @@ function render() {
   $("btnPause").hidden = !s.running || s.paused;
   $("btnResume").hidden = !s.running || !s.paused;
   $("btnStop").hidden = !s.running;
-  $("btnRender").disabled = !q.path || q.pending === 0;
+  $("btnRender").disabled = !q.path || (q.pending === 0 && !(q.toDenoise > 0));
+  $("btnRender").title = q.pending === 0 && q.toDenoise > 0 ? `Nothing to render; ${q.toDenoise} finished scene(s) wait for denoising` : "Start rendering pending scenes";
   $("shutdownAfter").checked = !!s.shutdownAfterQueue;
-  $("counts").textContent = q.total ? `${q.pending} pending · ${q.running} running · ${q.done} done · ${q.failed} failed` + (q.averageSecs ? ` · avg ${hms(q.averageSecs)}` : "") : "";
+  $("counts").textContent = q.total ? `${q.pending} pending · ${q.running} running · ${q.done} done · ${q.failed} failed` + (q.toDenoise ? ` · ${q.toDenoise} to denoise` : "") + (q.averageSecs ? ` · avg ${hms(q.averageSecs)}` : "") : "";
 
   // workers
   $("workers").innerHTML = s.workers.map(workerCard).join("");
@@ -165,7 +166,8 @@ function sceneRow(sc, find) {
   const assets = sc.postLoaders.length ? `${sc.postLoaders.length} PRA` : "";
   const last = sc.lastSecs ? hms(sc.lastSecs) : "";
   const err = sc.lastError ? ` title="${esc(sc.lastError)}"` : "";
-  const dnMark = sc.denoised === true ? `<span class="dnok" title="denoised">✓</span>` : sc.denoised === false ? `<span class="dnfail" title="denoise failed, see queue log">!</span>` : "";
+  const dnMark = sc.denoised === true ? `<span class="dnok" title="denoised">✓</span>` : sc.denoised === false ? `<span class="dnfail" title="denoise failed, see queue log">!</span>`
+    : (sc.denoise && sc.stateName === "done") ? `<span class="dnwait" title="waiting: will be denoised by the next run">…</span>` : "";
   const dn = `<input type="checkbox" class="dnbox" data-act="denoise" ${sc.denoise ? "checked" : ""} title="Post-render denoise${state.config.denoiserValid ? "" : " (no valid denoiser path in Settings: flag is skipped)"}">${dnMark}`;
   return `<tr class="${cls}" data-i="${sc.index}"${err} draggable="true">
     <td class="sel"><input type="checkbox" class="selbox" ${inSel ? "checked" : ""}></td>
@@ -199,6 +201,8 @@ function renderDetails(sc, full) {
     if (img.dataset.src !== src) { img.src = src; img.dataset.src = src; }
     img.hidden = false; $("dNoThumb").hidden = true; $("dThumbLink").href = `/api/scene/${sc.index}/image`;
   } else { img.hidden = true; img.dataset.src = ""; $("dNoThumb").hidden = false; $("dThumbLink").removeAttribute("href"); }
+  $("dDenoisedLink").hidden = !sc.denoisedFile;
+  if (sc.denoisedFile) $("dDenoisedA").href = `/api/scene/${sc.index}/denoised`;
   if (full || d.dataset.index !== String(sc.index)) {
     d.dataset.index = sc.index;
     $("dTarget").value = sc.target || "";
@@ -484,7 +488,7 @@ $("btnSettings").onclick = () => {
   document.querySelectorAll("input[data-note]").forEach((cb) => (cb.checked = (c.notifications || {})[cb.dataset.note] !== false));
   $("sTimeout").value = c.jobTimeoutS; $("sStall").value = c.stallTimeoutS; $("sAttempts").value = c.maxAttempts;
   $("sSize").value = c.imageSize ? c.imageSize.join("x") : ""; $("sDaz").value = c.dazExe; $("sPort").value = c.webPort;
-  $("sDenoiser").value = c.denoiserExe || "";
+  $("sDenoiser").value = c.denoiserExe || ""; $("sKeepOriginal").checked = !!c.denoiseKeepOriginal;
   $("sDenoiserState").textContent = c.denoiserExe ? (c.denoiserValid ? "✓ found" : "✗ not found: denoise flags are skipped") : "not set: denoise flags are skipped";
   $("sDenoiserState").className = "hint " + (c.denoiserExe && !c.denoiserValid ? "err" : "");
   $("sInfo").textContent = `Work dir: ${c.workDir}` + (state.running ? " · workers can be changed when not rendering" : "");
@@ -506,7 +510,7 @@ $("settingsForm").onsubmit = async (e) => {
   const size = $("sSize").value.trim();
   const body = { jobTimeoutS: Number($("sTimeout").value), stallTimeoutS: Number($("sStall").value), maxAttempts: Number($("sAttempts").value),
     imageSize: size ? size.toLowerCase().split("x").map(Number) : [], dazExe: $("sDaz").value.trim(), webPort: Number($("sPort").value),
-    denoiserExe: $("sDenoiser").value.trim(),
+    denoiserExe: $("sDenoiser").value.trim(), denoiseKeepOriginal: $("sKeepOriginal").checked,
     notifications: Object.fromEntries([...document.querySelectorAll("input[data-note]")].map((cb) => [cb.dataset.note, cb.checked])) };
   if (!state.running) { body.workers = workers; if (modeEl) body.mode = modeEl.value; }
   const newPort = body.webPort !== state.config.webPort ? body.webPort : null;

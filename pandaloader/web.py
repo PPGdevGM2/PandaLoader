@@ -108,6 +108,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[1] == "scene" and parts[3] == "image":
                 sc = m._scene(int(parts[2]))
                 return self._file(Path(sc.target), "image/png")
+            if len(parts) == 4 and parts[1] == "scene" and parts[3] == "denoised":
+                from .denoise import denoised_path
+                sc = m._scene(int(parts[2]))
+                return self._file(denoised_path(sc.target), "image/png")
             if len(parts) == 4 and parts[1] == "scene" and parts[3] == "cameras":
                 return self._json(m.scene_cameras(int(parts[2])))
             return self._error("not found", 404)
@@ -171,7 +175,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     job_timeout_s=body.get("jobTimeoutS"), stall_timeout_s=body.get("stallTimeoutS"),
                     max_attempts=body.get("maxAttempts"), image_size=body.get("imageSize"), daz_exe=body.get("dazExe"),
                     web_port=body.get("webPort"), mode=body.get("mode"), notifications=body.get("notifications"),
-                    denoiser_exe=body.get("denoiserExe"),
+                    denoiser_exe=body.get("denoiserExe"), denoise_keep_original=body.get("denoiseKeepOriginal"),
                 )
             else:
                 return self._error("not found", 404)

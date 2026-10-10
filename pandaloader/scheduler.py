@@ -38,6 +38,7 @@ class Scheduler:
         self._threads: Dict[str, threading.Thread] = {}
         self._runs: Dict[str, WorkerRun] = {}
         self._attempts = defaultdict(int)
+        self._denoise_claimed: set = set()
         self._stop = threading.Event()
         self._pause = threading.Event()
         self._finished_once = False
@@ -53,11 +54,11 @@ class Scheduler:
             n = self.queue.reset_running()
             if n:
                 self.queue.append_log(f"PandaLoader: reset {n} scene(s) left in state 3")
-                self.queue.save()
+                self._save()
             mode = "one scene at a time" if self.cfg.mode == "combined" else "one scene per worker"
             self.queue.append_log(f"PandaLoader: launched ({mode}) with {len(self.slots)} worker(s): "
                                   + ", ".join(f"{w.name}(gpu {w.gpu_text})" for w in self.slots))
-            self.queue.save()
+            self._save()
         self.status.running = True
         self.status.started_at = time.time()
         self.status.log(f"queue {self.queue.path}: {self.queue.counts()}")
@@ -97,21 +98,56 @@ class Scheduler:
 
     # -- slot loop -------------------------------------------------------------
     def _slot_loop(self, slot: WorkerSlot) -> None:
+        failures = 0
         try:
             while not self._stop.is_set():
                 if self._pause.is_set():
                     time.sleep(0.5)
                     continue
-                scene = self._claim(slot)
-                if scene is None:
-                    break
-                self._run_one(slot, scene)
-        except Exception as e:  # never let a slot die silently
-            log.exception("slot %s crashed", slot.name)
-            self.status.log(f"slot crashed: {e!r}", level="error", worker=slot.name)
+                scene = None
+                try:
+                    scene = self._claim(slot)
+                    if scene is None:
+                        dn = self._claim_denoise(slot)
+                        if dn is None:
+                            break
+                        self._run_denoise_only(slot, dn)
+                        continue
+                    self._run_one(slot, scene)
+                    failures = 0
+                except Exception as e:  # one bad job must not take the worker down
+                    failures += 1
+                    log.exception("slot %s: job failed unexpectedly", slot.name)
+                    self.status.log(f"job error: {e!r}", level="error", worker=slot.name)
+                    if scene is not None:
+                        self._mark_crashed(slot, scene, f"internal error: {e!r}")
+                    self.status.worker_idle(slot.name)
+                    if failures >= 3:  # something systematic: stop this worker rather than loop
+                        self.status.log("three consecutive errors; worker stops", level="error", worker=slot.name)
+                        break
+                    time.sleep(2.0)
         finally:
             self.status.worker_idle(slot.name)
             self._maybe_finished()
+
+    def _mark_crashed(self, slot: WorkerSlot, scene: Scene, reason: str) -> None:
+        with self.qlock:
+            if scene.state == STATE_RUNNING:
+                scene.mark_failed(reason)
+                self.queue.append_log(f"{slot.name}: FAILED {scene.name}: {reason}")
+            self._save("after job error")
+
+    def _save(self, what: str = "") -> bool:
+        """Save the queue; a persistent lock (Dropbox, antivirus) is logged, not fatal.
+        The in-memory state is written by the next successful save."""
+        try:
+            self.queue.save()
+            self._publish_queue()
+            return True
+        except (OSError, ValueError) as e:
+            log.error("queue save failed %s: %s", what, e)
+            self.status.log(f"queue save failed{' ' + what if what else ''}: {e}", level="error")
+            return False
 
     def _claim(self, slot: WorkerSlot) -> Optional[Scene]:
         with self.qlock:
@@ -121,9 +157,30 @@ class Scheduler:
             scene.mark_running()
             self._attempts[scene.index] += 1
             self.queue.append_log(f"{slot.name}: starting job {scene.index + 1}/{len(self.queue.scenes)}: {scene.file}")
-            self.queue.save()
-            self._publish_queue()
+            self._save()
             return scene
+
+    # -- denoise-only jobs: done scenes whose flag was set after the render ----------
+    def _claim_denoise(self, slot: WorkerSlot) -> Optional[Scene]:
+        with self.qlock:
+            scene = self.queue.next_denoise(exclude=self._denoise_claimed)
+            if scene is None:
+                return None
+            self._denoise_claimed.add(scene.index)
+            return scene
+
+    def _run_denoise_only(self, slot: WorkerSlot, scene: Scene) -> None:
+        st = self.status
+        st.update_worker(slot.name, state="denoising", scene_index=scene.index, scene_name=scene.name,
+                         target=scene.target, job_started=time.time(), render_started=None, iterations=0.0,
+                         expected_secs=0.0, last_error="")
+        ok, msg = self._denoise(slot, scene, scene.target)
+        with self.qlock:
+            scene.mark_denoised(ok)
+            self.queue.append_log(f"{slot.name}: {'denoised' if ok else 'DENOISE FAILED'} {scene.name} (existing render): {msg}")
+            st.log(f"{scene.name}: {msg}", level="info" if ok else "warning", worker=slot.name)
+            self._save("after denoise")
+        st.worker_idle(slot.name)
 
     def _run_one(self, slot: WorkerSlot, scene: Scene) -> None:
         st = self.status
@@ -225,7 +282,7 @@ class Scheduler:
                     self.queue.append_log(f"{slot.name}: WARNING {w}")
                 if denoise_note is not None:
                     ok, msg = denoise_note
-                    scene.data["denoised"] = ok
+                    scene.mark_denoised(ok)
                     self.queue.append_log(f"{slot.name}: {'denoised' if ok else 'DENOISE FAILED'} {scene.name}: {msg}")
                     st.log(f"{scene.name}: {msg}", level="info" if ok else "warning", worker=slot.name)
             elif self._stop.is_set() or (result is not None and result.killed and "stopped" in result.reason):
@@ -246,8 +303,7 @@ class Scheduler:
                 st.log(f"failed {scene.name}: {reason}", level="error", worker=slot.name)
             if result is not None and not result.ok and result.log_tail:
                 log.warning("%s log tail for %s:\n%s", slot.name, scene.name, "\n".join(result.log_tail[-15:]))
-            self.queue.save()
-            self._publish_queue()
+            self._save()
         st.worker_idle(slot.name)
 
     def _denoise(self, slot: WorkerSlot, scene: Scene, target: str):
@@ -256,9 +312,12 @@ class Scheduler:
         exe = resolve_denoiser(self.cfg.denoiser_exe)
         if exe is None:
             return False, "denoise skipped: no valid denoiser path in Settings"
+        if not Path(target).is_file():
+            return False, f"denoise skipped: render not found at {target}"
         self.status.update_worker(slot.name, state="denoising")
         self.status.log(f"denoising {scene.name}", worker=slot.name)
-        ok, msg, _secs = denoise_in_place(exe, target, timeout_s=self.cfg.denoise_timeout_s)
+        ok, msg, _secs = denoise_in_place(exe, target, timeout_s=self.cfg.denoise_timeout_s,
+                                          keep_original=self.cfg.denoise_keep_original)
         return ok, msg
 
     # -- housekeeping ----------------------------------------------------------
@@ -274,7 +333,11 @@ class Scheduler:
             pass
 
     def _maybe_finished(self) -> None:
-        if self.alive or self._finished_once:
+        # Called from a slot thread's finally block: that thread is still alive, so it must
+        # not count. Otherwise the last slot never sees the run as finished.
+        me = threading.current_thread()
+        others_alive = any(t.is_alive() and t is not me for t in self._threads.values())
+        if others_alive or self._finished_once:
             return
         self._finished_once = True
         self.status.running = False
@@ -285,7 +348,7 @@ class Scheduler:
         c = self.queue.counts()
         with self.qlock:
             self.queue.append_log(f"PandaLoader: queue finished: {c['done']} done, {c['failed']} failed")
-            self.queue.save()
+            self._save()
         self.status.log(f"queue finished: {c['done']} done, {c['failed']} failed")
         if self.on_queue_finished:
             try:

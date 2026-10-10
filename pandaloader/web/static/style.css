@@ -140,6 +140,7 @@ table.scenes td.dn, table.scenes th.dn { text-align: center; width: 70px; }
 table.scenes td.dn input { vertical-align: middle; cursor: pointer; }
 .dnok { color: var(--ok); margin-left: 4px; font-size: 12px; }
 .dnfail { color: var(--err); margin-left: 4px; font-weight: 700; }
+.dnwait { color: var(--warn); margin-left: 4px; font-weight: 700; }
 .phase.denoising { color: var(--warn); }
 .worker.denoising .bar i { background: var(--warn); }
 .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 600; letter-spacing: .3px; }

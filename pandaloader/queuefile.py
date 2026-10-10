@@ -87,16 +87,32 @@ class Scene:
 
     @denoise.setter
     def denoise(self, value: bool) -> None:
+        """Switching on requests a (new) denoise: any previous result is forgotten.
+        Switching off removes both keys so the plugin's file layout stays untouched."""
         if value:
             self.data["denoise"] = True
-        else:  # keep the plugin's file layout untouched unless the flag is on
+            self.data.pop("denoised", None)
+        else:
             self.data.pop("denoise", None)
             self.data.pop("denoised", None)
+
+    def mark_denoised(self, ok: bool) -> None:
+        """Record the outcome. Success clears the request flag and keeps the tick;
+        failure keeps the flag so the row shows what was asked and what went wrong."""
+        self.data["denoised"] = bool(ok)
+        if ok:
+            self.data.pop("denoise", None)
 
     @property
     def denoised(self) -> Optional[bool]:
         """True/False after a render with the flag set, None if never attempted."""
         return self.data.get("denoised")
+
+    @property
+    def needs_denoise(self) -> bool:
+        """Done, flagged, never attempted (a denoise-only job). A failed attempt shows
+        as such and is retried only after the flag is switched off and on again."""
+        return self.is_done and self.denoise and self.denoised is None and bool(self.target)
 
     # -- camera --------------------------------------------------------------
     @property
@@ -167,8 +183,12 @@ class QueueFile:
     def empty(cls, path=None) -> "QueueFile":
         return cls({"renderqVersion": 1, "scenes": [], "log": []}, path)
 
-    def save(self, path=None, retries: int = 10) -> Path:
-        """Atomic save: write a sibling temp file, then replace. Retries on sync locks."""
+    def save(self, path=None, max_wait_s: float = 45.0) -> Path:
+        """Atomic save: write a sibling temp file, then replace.
+
+        Dropbox (and antivirus) hold the file for a moment after every change, so
+        the replace is retried with backoff for up to ``max_wait_s`` seconds.
+        """
         target = Path(path) if path else self.path
         if target is None:
             raise ValueError("queue has no path")
@@ -176,17 +196,22 @@ class QueueFile:
         tmp = target.with_name(target.name + ".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.data, f, indent=2, ensure_ascii=False)
-        last: Optional[Exception] = None
-        for _ in range(retries):
+        deadline = time.time() + max_wait_s
+        delay = 0.25
+        while True:
             try:
                 os.replace(tmp, target)
                 self.path = target
                 return target
-            except PermissionError as e:  # Dropbox or antivirus holding the file
-                last = e
-                time.sleep(0.5)
-        assert last is not None
-        raise last
+            except OSError as e:  # PermissionError 13 / 32 while another process holds the file
+                if time.time() >= deadline:
+                    try:
+                        tmp.unlink()
+                    except OSError:
+                        pass
+                    raise OSError(f"could not write {target.name} for {int(max_wait_s)} s: {e}") from e
+                time.sleep(delay)
+                delay = min(2.0, delay * 1.6)
 
     # -- scenes --------------------------------------------------------------
     @property
@@ -215,6 +240,13 @@ class QueueFile:
                 return s
         return None
 
+    def next_denoise(self, exclude: Iterable[int] = ()) -> Optional[Scene]:
+        skip = set(exclude)
+        for s in self.scenes:
+            if s.needs_denoise and s.index not in skip:
+                return s
+        return None
+
     def reset_running(self) -> int:
         """Scenes left in state 3 by a crash go back to pending. Returns how many."""
         n = 0
@@ -234,9 +266,11 @@ class QueueFile:
         return n
 
     def counts(self) -> dict:
-        c = {"total": 0, "pending": 0, "running": 0, "done": 0, "failed": 0}
+        c = {"total": 0, "pending": 0, "running": 0, "done": 0, "failed": 0, "toDenoise": 0}
         for s in self.scenes:
             c["total"] += 1
+            if s.needs_denoise:
+                c["toDenoise"] += 1
             if s.is_done:
                 c["done"] += 1
             elif s.state == STATE_RUNNING:

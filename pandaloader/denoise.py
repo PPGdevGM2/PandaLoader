@@ -41,12 +41,24 @@ def resolve_denoiser(path: Optional[str]) -> Optional[str]:
     return info if ok else None
 
 
-def denoise_in_place(exe: str, target: str, timeout_s: float = 600.0, hdr: bool = False) -> Tuple[bool, str, float]:
-    """Denoise ``target`` and overwrite it. Returns (ok, message, seconds)."""
+DENOISED_SUFFIX = "_denoised"
+
+
+def denoised_path(target: str) -> Path:
+    """Where the denoised copy goes when the original is kept: <name>_denoised.<ext>."""
+    p = Path(target)
+    return p.with_name(f"{p.stem}{DENOISED_SUFFIX}{p.suffix}")
+
+
+def denoise_in_place(exe: str, target: str, timeout_s: float = 600.0, hdr: bool = False,
+                     keep_original: bool = False) -> Tuple[bool, str, float]:
+    """Denoise ``target``. Default: overwrite it (via a temp file). With
+    ``keep_original`` the result is written to <name>_denoised.<ext> and the
+    render stays untouched. Returns (ok, message, seconds)."""
     src = Path(target)
     if not src.is_file():
         return False, f"render missing: {target}", 0.0
-    tmp = src.with_name(f"{src.stem}.denoise-tmp{src.suffix}")
+    tmp = denoised_path(target) if keep_original else src.with_name(f"{src.stem}.denoise-tmp{src.suffix}")
     if tmp.exists():
         tmp.unlink()
     cmd = [exe, "-i", str(src), "-o", str(tmp), "-hdr", "1" if hdr else "0", "-v", "1"]
@@ -65,12 +77,14 @@ def denoise_in_place(exe: str, target: str, timeout_s: float = 600.0, hdr: bool 
         _cleanup(tmp)
         err = next((ln.split("|", 1)[-1].strip() for ln in out.splitlines() if "ERROR" in ln), "").strip()
         return False, f"denoiser produced no output{': ' + err if err else ''} (exit {r.returncode})", secs
+    if keep_original:
+        return True, f"denoised in {secs:.1f} s -> {tmp.name} (original kept)", secs
     try:
         os.replace(tmp, src)
     except OSError as e:
         _cleanup(tmp)
         return False, f"could not replace the render: {e}", secs
-    return True, f"denoised in {secs:.1f} s", secs
+    return True, f"denoised in {secs:.1f} s (replaced in place)", secs
 
 
 def _cleanup(p: Path) -> None:

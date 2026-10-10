@@ -94,6 +94,7 @@
     </div>
     <a id="dThumbLink" target="_blank" title="Open full image"><img id="dThumb" alt="" hidden></a>
     <div class="noimg" id="dNoThumb">not rendered yet</div>
+    <div class="hint" id="dDenoisedLink" hidden><a id="dDenoisedA" target="_blank">open the _denoised copy</a></div>
     <dl class="kv">
       <dt>File</dt><dd class="mono" id="dFile"></dd>
       <dt>State</dt><dd id="dState"></dd>
@@ -205,6 +206,7 @@
         <span class="row"><input id="sDenoiser" type="text" class="mono grow" placeholder="I:/Denoiser OI_v1.6/Denoiser_v1.6/Denoiser.exe"><button type="button" id="sDenoiserBrowse">Browse…</button></span>
         <span class="hint" id="sDenoiserState"></span>
       </label>
+      <label class="check"><input type="checkbox" id="sKeepOriginal"> Keep the original render <span class="hint">write the result as &lt;name&gt;_denoised.png beside it instead of replacing it</span></label>
       <fieldset>
         <legend>Desktop notifications <span class="hint">balloons from the tray icon</span></legend>
         <div class="grid2">

@@ -155,8 +155,11 @@ class Manager:
                 raise ManagerError("save the queue first")
             if not Path(self.cfg.daz_exe).exists():
                 raise ManagerError(f"DAZ executable not found: {self.cfg.daz_exe}")
-            if q.counts()["pending"] == 0 and q.counts()["running"] == 0:
-                raise ManagerError("nothing pending; reset scenes first")
+            c = q.counts()
+            if c["pending"] == 0 and c["running"] == 0 and c["toDenoise"] == 0:
+                raise ManagerError("nothing pending and nothing to denoise; reset scenes first")
+            if c["pending"] == 0 and c["running"] == 0 and not _denoiser_valid(self.cfg.denoiser_exe):
+                raise ManagerError("only denoise jobs are waiting, but no valid denoiser path is set in Settings")
             if not self.cfg.run_slots():
                 raise ManagerError("no worker is enabled; enable one in Settings")
             self.status = self._fresh_status()
@@ -391,8 +394,11 @@ class Manager:
                         max_attempts: Optional[int] = None, image_size: Optional[list] = None,
                         daz_exe: Optional[str] = None, web_port: Optional[int] = None,
                         mode: Optional[str] = None, notifications: Optional[dict] = None,
-                        denoiser_exe: Optional[str] = None) -> None:
+                        denoiser_exe: Optional[str] = None, denoise_keep_original: Optional[bool] = None) -> None:
         with self.lock:
+            if denoise_keep_original is not None and bool(denoise_keep_original) != self.cfg.denoise_keep_original:
+                self.cfg.denoise_keep_original = bool(denoise_keep_original)
+                self.status.log("denoise: " + ("keep original, write _denoised copy" if self.cfg.denoise_keep_original else "replace the render in place"))
             if denoiser_exe is not None and denoiser_exe != self.cfg.denoiser_exe:
                 from .denoise import validate_denoiser
                 self.cfg.denoiser_exe = denoiser_exe.strip()
@@ -570,6 +576,7 @@ class Manager:
                     d["savedCamera"] = s.uses_saved_camera
                     d["worker"] = running_index.get(s.index)
                     d["targetExists"] = Path(s.target).exists() if s.target else False
+                    d["denoisedFile"] = _denoised_file(s.target)
                     scenes.append(d)
                 snap["queue"]["log"] = q.data.get("log", [])[-30:]
             snap["scenes"] = scenes
@@ -581,10 +588,20 @@ class Manager:
                 "shutdownAfterQueue": self.cfg.shutdown_after_queue, "workDir": self.cfg.work_dir,
                 "webPort": self.cfg.web_port, "mode": self.cfg.mode, "notifications": dict(self.cfg.notifications),
                 "denoiserExe": self.cfg.denoiser_exe, "denoiserValid": _denoiser_valid(self.cfg.denoiser_exe),
+                "denoiseKeepOriginal": self.cfg.denoise_keep_original,
                 "runSlots": [w.to_dict() for w in self.cfg.run_slots()],
             }
             snap["gpus"] = _gpus()
             return snap
+
+
+def _denoised_file(target: str) -> Optional[str]:
+    """Path of the kept-original denoised copy if it exists, else None."""
+    if not target:
+        return None
+    from .denoise import denoised_path
+    p = denoised_path(target)
+    return p.as_posix() if p.is_file() else None
 
 
 def _denoiser_valid(path: str) -> bool:
