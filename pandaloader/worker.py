@@ -17,7 +17,7 @@ from typing import Callable, List, Optional
 
 from .config import Config, WorkerSlot
 from .jobgen import JobSpec
-from .logparse import LogParser, LogTail, Progress
+from .logparse import LogParser, LogTail, Progress, session_start_time
 
 EventCallback = Callable[[str, Progress], None]
 
@@ -120,11 +120,32 @@ class WorkerRun:
         killed = False
         reason = ""
         last_activity = start
+        # Only lines from this process's own session count. DAZ trims the head of
+        # a big log at startup, which makes the tail restart from byte 0 and would
+        # otherwise replay old sessions (and their errors).
+        session_ts_min = start - 15.0
+        armed = {"ok": False}
+
+        def own_session(lines: List[str]) -> List[str]:
+            if armed["ok"]:
+                return lines
+            out: List[str] = []
+            for ln in lines:
+                if not armed["ok"]:
+                    ts = session_start_time(ln)
+                    if ts is not None and ts >= session_ts_min:
+                        armed["ok"] = True
+                        out.append(ln)
+                else:
+                    out.append(ln)
+            return out
+
         while True:
             exited = self.proc.poll() is not None
             lines = tail.read_new_lines()
             if exited:
                 lines += tail.flush_partial()
+            lines = own_session(lines)
             if lines:
                 last_activity = time.time()
                 self._remember(lines)
@@ -148,7 +169,7 @@ class WorkerRun:
 
         # Late lines written during shutdown.
         time.sleep(0.2)
-        late = tail.read_new_lines() + tail.flush_partial()
+        late = own_session(tail.read_new_lines() + tail.flush_partial())
         if late:
             self._remember(late)
             for ev in parser.feed_many(late):

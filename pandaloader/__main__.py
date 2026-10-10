@@ -128,6 +128,38 @@ def cmd_run(args) -> int:
     return 0 if queue.counts()["failed"] == 0 else 1
 
 
+def cmd_serve(args) -> int:
+    from .manager import Manager
+    from .web import WebServer
+    cfg_path = Path(args.config) if args.config else Path(Config().work_dir) / "config.json"
+    cfg = Config.load(cfg_path) if cfg_path.exists() else Config()
+    if args.port:
+        cfg.web_port = int(args.port)
+    if args.host:
+        cfg.web_host = args.host
+    _setup_logging(cfg, args.verbose)
+    manager = Manager(cfg, cfg_path)
+    if not cfg_path.exists():
+        manager.save_config()
+    if args.queue:
+        manager.open_queue(args.queue)
+    server = WebServer(manager, cfg.web_host, cfg.web_port)
+    server.start()
+    print(f"PandaLoader web UI: {server.url}  (Ctrl+C to quit)", flush=True)
+    if not args.no_browser:
+        server.open_browser()
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    if manager.running:
+        print("stopping workers...", flush=True)
+        manager.scheduler.stop(wait=True, timeout=60)
+    server.stop()
+    return 0
+
+
 def cmd_status(args) -> int:
     q = QueueFile.load(args.queue)
     print(json.dumps(q.counts()))
@@ -192,6 +224,15 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--interval", type=float, default=15.0, help="seconds between progress lines")
     r.add_argument("-v", "--verbose", action="store_true")
     r.set_defaults(func=cmd_run)
+
+    sv = sub.add_parser("serve", help="start the web UI (and keep running)")
+    sv.add_argument("queue", nargs="?", help="queue to open at start (otherwise the last one)")
+    sv.add_argument("--config", help="config JSON (default: <work dir>/config.json)")
+    sv.add_argument("--port", type=int)
+    sv.add_argument("--host")
+    sv.add_argument("--no-browser", action="store_true")
+    sv.add_argument("-v", "--verbose", action="store_true")
+    sv.set_defaults(func=cmd_serve)
 
     s = sub.add_parser("status", help="show the scenes of a queue")
     s.add_argument("queue")

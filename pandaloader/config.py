@@ -69,7 +69,7 @@ class Config:
     shutdown_after_queue: bool = False
     image_size: Optional[tuple] = None # (w, h) override; None = take it from the preset
     web_host: str = "0.0.0.0"
-    web_port: int = 8765
+    web_port: int = 6969
 
     # -- derived paths -----------------------------------------------------
     def instance_dir(self, instance: str) -> Path:

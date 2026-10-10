@@ -57,6 +57,20 @@ _RE_FATAL = re.compile(
 
 
 _RE_ERR_TAIL = re.compile(r"rend (?:error|warn)\s*:\s*(.+)$")
+_RE_STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+
+
+def session_start_time(line: str) -> Optional[float]:
+    """If the line is the 'Daz Studio ... starting' banner, return its local timestamp (epoch seconds)."""
+    if not _RE_STARTING.search(line):
+        return None
+    m = _RE_STAMP.match(line)
+    if not m:
+        return 0.0
+    try:
+        return time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return 0.0
 
 
 def _error_text(line: str) -> str:
@@ -216,7 +230,9 @@ class LogTail:
     """Incrementally read new complete lines appended to a file.
 
     DAZ appends to log.txt across runs, so the tail starts at the current end
-    of file. A shrinking file (rotation) resets the offset to the start.
+    of file. A shrinking file resets the offset to the start: DAZ trims the
+    head of a large log when it launches, so callers must additionally gate on
+    the session banner (see ``session_start_time``) to skip old sessions.
     """
 
     def __init__(self, path, start_at_end: bool = True, encoding: str = "utf-8"):

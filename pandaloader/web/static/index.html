@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PandaLoader</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/static/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <img src="/static/logo.png" alt="" width="36" height="36">
+    <span class="name">PandaLoader</span>
+    <span class="sub" id="version"></span>
+  </div>
+  <div class="queue-id">
+    <span class="label">Queue</span>
+    <button class="linklike" id="queueName" title="Open a queue">no queue open</button>
+    <span class="path mono" id="queuePath"></span>
+    <span class="queue-actions">
+      <button id="btnOpen" title="Open a queue file">Open…</button>
+      <button id="btnNew" title="Create an empty queue">New…</button>
+      <button id="btnSaveAs" title="Save the queue under a new name">Save as…</button>
+    </span>
+  </div>
+  <div class="run">
+    <div class="summary" id="summary"></div>
+    <button class="primary" id="btnRender" title="Start rendering pending scenes">▶ Render</button>
+    <button id="btnPause" title="Finish running jobs, start no new ones">⏸ Pause</button>
+    <button id="btnResume" title="Continue claiming scenes">▶ Resume</button>
+    <button class="danger" id="btnStop" title="Kill running renders; their scenes go back to pending">■ Stop</button>
+    <button class="icon" id="btnSettings" title="Settings">⚙</button>
+  </div>
+</header>
+
+<section class="workers" id="workers"></section>
+
+<section class="toolbar">
+  <button id="btnAdd">+ Add scenes…</button>
+  <button id="btnResetFailed">Reset failed</button>
+  <button id="btnResetAll">Reset all</button>
+  <input id="find" type="search" placeholder="Find…" autocomplete="off">
+  <label class="check"><input type="checkbox" id="shutdownAfter"> Shut down PC after the queue</label>
+  <span class="spacer"></span>
+  <span class="counts" id="counts"></span>
+</section>
+
+<main class="main">
+  <div class="table-wrap">
+    <table class="scenes" id="scenes">
+      <thead>
+        <tr>
+          <th class="num">#</th>
+          <th class="state">State</th>
+          <th>Scene</th>
+          <th>Last mod.</th>
+          <th>Camera</th>
+          <th>Last render</th>
+          <th>Assets</th>
+          <th>Target</th>
+          <th class="actions"></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty" id="emptyHint" hidden>No scenes. Use <b>Add scenes…</b> to pick .duf files.</div>
+  </div>
+
+  <aside class="details" id="details" hidden>
+    <div class="details-head">
+      <h2 id="dTitle"></h2>
+      <button class="icon" id="dClose" title="Close">✕</button>
+    </div>
+    <a id="dThumbLink" target="_blank" title="Open full image"><img id="dThumb" alt="" hidden></a>
+    <div class="noimg" id="dNoThumb">not rendered yet</div>
+    <dl class="kv">
+      <dt>File</dt><dd class="mono" id="dFile"></dd>
+      <dt>State</dt><dd id="dState"></dd>
+      <dt>Last error</dt><dd id="dError" class="err"></dd>
+    </dl>
+    <form id="dForm" class="form" autocomplete="off">
+      <label>Target image
+        <span class="row"><input id="dTarget" type="text" class="mono"></span>
+      </label>
+      <label>Pre-render assets (one per line, merged after the scene loads)
+        <textarea id="dAssets" rows="2" class="mono"></textarea>
+      </label>
+      <label>Camera
+        <span class="row">
+          <select id="dCamera"><option value="">camera saved with scene</option></select>
+          <button type="button" id="dLoadCams" title="Read the camera list from the scene file (a few seconds)">list</button>
+        </span>
+      </label>
+      <div class="row buttons">
+        <button type="submit" class="primary">Save</button>
+        <button type="button" id="dReset">Reset to pending</button>
+        <button type="button" id="dDone">Mark done</button>
+        <button type="button" class="danger" id="dRemove">Remove</button>
+      </div>
+    </form>
+  </aside>
+</main>
+
+<section class="log">
+  <div class="log-head">
+    <button class="linklike" id="logToggle">Events ▾</button>
+    <span class="log-tabs">
+      <button class="tab active" data-tab="events">manager</button>
+      <button class="tab" data-tab="queue">queue log</button>
+    </span>
+  </div>
+  <pre id="logBody" class="mono"></pre>
+</section>
+
+<!-- file browser modal -->
+<div class="modal" id="browser" hidden>
+  <div class="dialog">
+    <div class="dialog-head"><h2 id="bTitle">Choose files</h2><button class="icon" data-close>✕</button></div>
+    <div class="browser-bar">
+      <select id="bDrives"></select>
+      <input id="bDir" type="text" class="mono grow">
+      <button id="bUp" title="Parent folder">↑</button>
+      <button id="bGo">Go</button>
+    </div>
+    <div class="browser-list" id="bList"></div>
+    <div class="browser-foot">
+      <label id="bNameRow" hidden>File name <input id="bName" type="text" class="mono"></label>
+      <span class="spacer"></span>
+      <span id="bCount"></span>
+      <button data-close>Cancel</button>
+      <button class="primary" id="bOk">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- add scenes modal -->
+<div class="modal" id="addDlg" hidden>
+  <div class="dialog">
+    <div class="dialog-head"><h2>Add scenes</h2><button class="icon" data-close>✕</button></div>
+    <form id="addForm" class="form">
+      <label>Scene files
+        <span class="row"><textarea id="aFiles" rows="5" class="mono grow" placeholder="one .duf per line"></textarea>
+        <button type="button" id="aBrowse">Browse…</button></span>
+      </label>
+      <label>Target folder (PNG named after the scene)
+        <span class="row"><input id="aTargetDir" type="text" class="mono grow"><button type="button" id="aTargetBrowse">Browse…</button></span>
+      </label>
+      <label>Pre-render assets (one per line)
+        <span class="row"><textarea id="aAssets" rows="2" class="mono grow"></textarea><button type="button" id="aAssetBrowse">Browse…</button></span>
+      </label>
+      <label class="check"><input type="checkbox" id="aTop"> Insert at the top of the queue</label>
+      <div class="row buttons"><span class="spacer"></span><button type="button" data-close>Cancel</button><button type="submit" class="primary">Add</button></div>
+    </form>
+  </div>
+</div>
+
+<!-- settings modal -->
+<div class="modal" id="settingsDlg" hidden>
+  <div class="dialog">
+    <div class="dialog-head"><h2>Settings</h2><button class="icon" data-close>✕</button></div>
+    <form id="settingsForm" class="form">
+      <fieldset>
+        <legend>Workers <span class="hint">one DAZ instance each; pin to a CUDA device or use all</span></legend>
+        <div id="sWorkers"></div>
+        <button type="button" id="sAddWorker">+ worker</button>
+      </fieldset>
+      <div class="grid2">
+        <label>Job timeout (s)<input id="sTimeout" type="number" min="60"></label>
+        <label>Stall timeout (s)<input id="sStall" type="number" min="30"></label>
+        <label>Attempts per scene<input id="sAttempts" type="number" min="1" max="5"></label>
+        <label>Image size override <span class="hint">empty = preset</span><input id="sSize" type="text" placeholder="e.g. 960x540"></label>
+      </div>
+      <label>DAZ Studio executable<input id="sDaz" type="text" class="mono"></label>
+      <div class="hint" id="sInfo"></div>
+      <div class="row buttons"><span class="spacer"></span><button type="button" data-close>Cancel</button><button type="submit" class="primary">Save</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
