@@ -27,6 +27,7 @@ function fmtTime(t) {
 }
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function base(p) { return String(p || "").split(/[\\/]/).pop(); }
+function dirname(p) { const s = String(p || ""); const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\")); return i > 0 ? s.slice(0, i) : ""; }
 function toast(msg, ok = false) {
   const t = $("toast");
   t.textContent = msg; t.className = "toast" + (ok ? " ok" : ""); t.hidden = false;
@@ -184,6 +185,7 @@ const browser = {
     try {
       const d = await api(`/api/browse?kind=${this.dirsOnly ? "none" : this.kind}` + (dir ? `&dir=${encodeURIComponent(dir)}` : ""));
       this.cur = d; $("bDir").value = d.dir;
+      if (d.fallback) toast(`folder not available, showing ${d.dir}`);
       const drives = $("bDrives");
       drives.innerHTML = d.drives.map((x) => `<option ${d.dir.toUpperCase().startsWith(x.toUpperCase()) ? "selected" : ""}>${x}</option>`).join("");
       $("bList").innerHTML = d.dirs.map((n) => `<div class="entry dir" data-name="${esc(n)}"><span class="ic">▸</span>${esc(n)}</div>`).join("")
@@ -236,17 +238,17 @@ document.addEventListener("keydown", (e) => {
 
 // ---------- header actions ----------
 $("btnOpen").onclick = $("queueName").onclick = async () => {
-  const start = state && state.queue.path ? state.queue.path.replace(/\/[^/]*$/, "") : null;
+  const start = state && state.queue.path ? dirname(state.queue.path) : null;
   const p = await browser.open({ title: "Open queue (.rq.json)", kind: "queue", start });
   if (p) act("/api/queue/open", { path: p }, "queue opened");
 };
 $("btnNew").onclick = async () => {
-  const start = state && state.queue.path ? state.queue.path.replace(/\/[^/]*$/, "") : null;
+  const start = state && state.queue.path ? dirname(state.queue.path) : null;
   const p = await browser.open({ title: "New queue: choose folder and name", kind: "queue", nameRow: true, start, defaultName: "queue.rq.json" });
   if (p) act("/api/queue/new", { path: p }, "queue created");
 };
 $("btnSaveAs").onclick = async () => {
-  const start = state && state.queue.path ? state.queue.path.replace(/\/[^/]*$/, "") : null;
+  const start = state && state.queue.path ? dirname(state.queue.path) : null;
   const p = await browser.open({ title: "Save queue as", kind: "queue", nameRow: true, start, defaultName: base(state.queue.path || "queue.rq.json") });
   if (p) act("/api/queue/save", { path: p }, "saved");
 };
@@ -294,7 +296,7 @@ $("dLoadCams").onclick = async () => {
 // ---------- add scenes ----------
 $("btnAdd").onclick = () => {
   const sc = state.scenes[state.scenes.length - 1];
-  $("aTargetDir").value = sc && sc.target ? sc.target.replace(/\/[^/]*$/, "") : "";
+  $("aTargetDir").value = sc && sc.target ? dirname(sc.target) : "";
   $("aAssets").value = sc ? sc.postLoaders.join("\n") : "";
   $("aFiles").value = "";
   $("addDlg").hidden = false;
@@ -308,7 +310,7 @@ $("aTargetBrowse").onclick = async () => {
   if (d) $("aTargetDir").value = d;
 };
 $("aAssetBrowse").onclick = async () => {
-  const f = await browser.open({ title: "Pick a preset (.duf)", kind: "scene", start: ($("aAssets").value.split("\n")[0] || "").replace(/\/[^/]*$/, "") || null });
+  const f = await browser.open({ title: "Pick a preset (.duf)", kind: "scene", start: dirname($("aAssets").value.split("\n")[0] || "") || null });
   if (f) $("aAssets").value = ($("aAssets").value.trim() ? $("aAssets").value.trim() + "\n" : "") + f;
 };
 $("addForm").onsubmit = async (e) => {
@@ -329,8 +331,8 @@ $("btnSettings").onclick = () => {
   const c = state.config;
   $("sWorkers").innerHTML = c.workers.map((w) => workerRowHtml(w, state.gpus)).join("");
   $("sTimeout").value = c.jobTimeoutS; $("sStall").value = c.stallTimeoutS; $("sAttempts").value = c.maxAttempts;
-  $("sSize").value = c.imageSize ? c.imageSize.join("x") : ""; $("sDaz").value = c.dazExe;
-  $("sInfo").textContent = `Work dir: ${c.workDir} · web port ${c.webPort}` + (state.running ? " · workers can be changed when not rendering" : "");
+  $("sSize").value = c.imageSize ? c.imageSize.join("x") : ""; $("sDaz").value = c.dazExe; $("sPort").value = c.webPort;
+  $("sInfo").textContent = `Work dir: ${c.workDir}` + (state.running ? " · workers can be changed when not rendering" : "");
   $("settingsDlg").hidden = false;
 };
 $("sAddWorker").onclick = () => {
@@ -343,10 +345,14 @@ $("settingsForm").onsubmit = async (e) => {
   const workers = [...$("sWorkers").querySelectorAll(".worker-row")].map((r) => ({ name: r.querySelector(".wname").value.trim(), gpu: r.querySelector(".wgpu").value }));
   const size = $("sSize").value.trim();
   const body = { jobTimeoutS: Number($("sTimeout").value), stallTimeoutS: Number($("sStall").value), maxAttempts: Number($("sAttempts").value),
-    imageSize: size ? size.toLowerCase().split("x").map(Number) : [], dazExe: $("sDaz").value.trim() };
+    imageSize: size ? size.toLowerCase().split("x").map(Number) : [], dazExe: $("sDaz").value.trim(), webPort: Number($("sPort").value) };
   if (!state.running) body.workers = workers;
+  const newPort = body.webPort !== state.config.webPort ? body.webPort : null;
   const d = await act("/api/settings", body, "settings saved");
-  if (d) $("settingsDlg").hidden = true;
+  if (d) {
+    $("settingsDlg").hidden = true;
+    if (newPort) { clearInterval(pollTimer); setTimeout(() => { location.href = `${location.protocol}//${location.hostname}:${newPort}/`; }, 500); }
+  }
 };
 
 // ---------- log ----------

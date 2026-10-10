@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import os
 import threading
 import webbrowser
 from http import HTTPStatus
@@ -50,9 +51,26 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type or mimetypes.guess_type(str(path))[0] or "application/octet-stream")
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "max-age=86400" if cache else "no-store")
+        # Everything no-store: a local app whose page must pick up updates immediately.
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
+
+    def _index(self) -> None:
+        """index.html with {{v}} replaced by the newest static file's mtime: a cache buster
+        so browsers reload style and script after every update."""
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        try:
+            v = int(max(p.stat().st_mtime for p in STATIC.iterdir() if p.is_file()))
+        except (OSError, ValueError):
+            v = 0
+        body = html.replace("{{v}}", str(v)).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _body(self) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
@@ -70,7 +88,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
             if not parts:
-                return self._file(STATIC / "index.html", "text/html; charset=utf-8")
+                return self._index()
             if parts[0] == "static" and len(parts) == 2:
                 return self._file(STATIC / parts[1], cache=True)
             if parts[0] in ("favicon.ico",):
@@ -145,6 +163,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     workers=body.get("workers"), shutdown_after_queue=body.get("shutdownAfterQueue"),
                     job_timeout_s=body.get("jobTimeoutS"), stall_timeout_s=body.get("stallTimeoutS"),
                     max_attempts=body.get("maxAttempts"), image_size=body.get("imageSize"), daz_exe=body.get("dazExe"),
+                    web_port=body.get("webPort"),
                 )
             else:
                 return self._error("not found", 404)
@@ -158,13 +177,19 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._error(f"{type(e).__name__}: {e}", 500)
 
 
+class _Server(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second socket bind a port that is still in
+    # use, silently stealing or losing connections. Binding must fail instead.
+    allow_reuse_address = os.name != "nt"
+    daemon_threads = True
+
+
 class WebServer:
     def __init__(self, manager: Manager, host: str, port: int):
         self.manager = manager
         self.host, self.port = host, port
         handler = type("BoundHandler", (ApiHandler,), {"manager": manager})
-        self.httpd = ThreadingHTTPServer((host, port), handler)
-        self.httpd.daemon_threads = True
+        self.httpd = _Server((host, port), handler)
         self._thread: Optional[threading.Thread] = None
 
     @property
@@ -178,7 +203,9 @@ class WebServer:
         log.info("web UI on %s", self.url)
 
     def stop(self) -> None:
+        """Stop serving and close the listening socket so the port is really free."""
         self.httpd.shutdown()
+        self.httpd.server_close()
 
     def open_browser(self) -> None:
         webbrowser.open(self.url)

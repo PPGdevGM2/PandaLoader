@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import signal
 import subprocess
 import sys
@@ -128,23 +129,96 @@ def cmd_run(args) -> int:
     return 0 if queue.counts()["failed"] == 0 else 1
 
 
-def cmd_serve(args) -> int:
+class AlreadyRunning(Exception):
+    def __init__(self, url: str):
+        super().__init__(url)
+        self.url = url
+
+
+def _running_instance(port: int):
+    """URL of a PandaLoader already serving on this port, or None."""
+    import json as _json
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=2) as r:
+            data = _json.loads(r.read().decode("utf-8"))
+        if isinstance(data, dict) and "workers" in data and "queue" in data:
+            return f"http://localhost:{port}/"
+    except Exception:  # noqa: BLE001  (connection refused, not JSON, not ours)
+        pass
+    return None
+
+
+def _message_box(text: str, title: str = "PandaLoader") -> None:
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, text, title, 0x10)  # MB_ICONERROR
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    print(f"{title}: {text}", file=sys.stderr)
+
+
+def _start_app(args):
+    """Shared setup for serve and tray: config, manager, web server.
+
+    Raises AlreadyRunning when another PandaLoader already owns the port.
+    """
     from .manager import Manager
     from .web import WebServer
     cfg_path = Path(args.config) if args.config else Path(Config().work_dir) / "config.json"
     cfg = Config.load(cfg_path) if cfg_path.exists() else Config()
-    if args.port:
+    if getattr(args, "port", None):
         cfg.web_port = int(args.port)
-    if args.host:
+    if getattr(args, "host", None):
         cfg.web_host = args.host
     _setup_logging(cfg, args.verbose)
+    existing = _running_instance(cfg.web_port)
+    if existing:
+        raise AlreadyRunning(existing)
+    try:
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:  # fail early, before touching the queue
+            probe.bind((cfg.web_host, cfg.web_port))
+    except OSError as e:
+        raise RuntimeError(f"Port {cfg.web_port} is in use by another program ({e.strerror or e}).\n"
+                           f"Change the port with: PandaLoader.exe --port <number>")
     manager = Manager(cfg, cfg_path)
     if not cfg_path.exists():
         manager.save_config()
-    if args.queue:
+    if getattr(args, "queue", None):
         manager.open_queue(args.queue)
     server = WebServer(manager, cfg.web_host, cfg.web_port)
     server.start()
+    return manager, server
+
+
+def cmd_serve(args) -> int:
+    from .manager import ManagerError
+    from .web import WebServer
+    try:
+        manager, server = _start_app(args)
+    except AlreadyRunning as e:
+        print(f"PandaLoader is already running at {e.url}", file=sys.stderr)
+        return 1
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    holder = {"server": server}
+
+    def rebind(port: int) -> None:
+        try:
+            new = WebServer(manager, manager.cfg.web_host, port)
+        except OSError as e:
+            raise ManagerError(f"port {port} not available: {e.strerror or e}")
+        old = holder["server"]
+        new.start()
+        holder["server"] = new
+        old.stop()
+        print(f"web UI moved to {new.url}", flush=True)
+
+    manager.on_port_change = rebind
     print(f"PandaLoader web UI: {server.url}  (Ctrl+C to quit)", flush=True)
     if not args.no_browser:
         server.open_browser()
@@ -156,7 +230,31 @@ def cmd_serve(args) -> int:
     if manager.running:
         print("stopping workers...", flush=True)
         manager.scheduler.stop(wait=True, timeout=60)
-    server.stop()
+    holder["server"].stop()
+    return 0
+
+
+def cmd_tray(args) -> int:
+    import webbrowser
+    try:
+        from .tray import TrayApp
+        manager, server = _start_app(args)
+    except AlreadyRunning as e:
+        webbrowser.open(e.url)  # second launch: just show the page of the running instance
+        return 0
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("pandaloader").exception("startup failed")
+        _message_box(f"PandaLoader could not start:\n\n{e}")
+        return 1
+    app = TrayApp(manager, server, manager.cfg.web_host)
+    if args.open:
+        server.open_browser()
+    try:
+        app.run()  # blocks on the main thread until Quit
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("pandaloader").exception("tray crashed")
+        _message_box(f"PandaLoader stopped with an error:\n\n{e}")
+        return 1
     return 0
 
 
@@ -233,6 +331,15 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--no-browser", action="store_true")
     sv.add_argument("-v", "--verbose", action="store_true")
     sv.set_defaults(func=cmd_serve)
+
+    tr = sub.add_parser("tray", help="run with a tray icon and the web UI (use pythonw for no console)")
+    tr.add_argument("queue", nargs="?")
+    tr.add_argument("--config")
+    tr.add_argument("--port", type=int)
+    tr.add_argument("--host")
+    tr.add_argument("--open", action="store_true", help="open the browser at start")
+    tr.add_argument("-v", "--verbose", action="store_true")
+    tr.set_defaults(func=cmd_tray)
 
     s = sub.add_parser("status", help="show the scenes of a queue")
     s.add_argument("queue")

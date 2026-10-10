@@ -121,6 +121,7 @@ table.scenes tr:hover td.actions button, table.scenes tr.selected td.actions but
 .kv dd { margin: 0; overflow-wrap: anywhere; }
 .err { color: var(--err); }
 .form label { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.form label.check { flex-direction: row; align-items: center; gap: 8px; }
 .form .row { display: flex; gap: 6px; align-items: flex-start; }
 .form .row input, .form .row select, .form .row textarea { flex: 1; }
 .form .buttons { margin-top: 12px; }
@@ -143,6 +144,7 @@ table.scenes tr:hover td.actions button, table.scenes tr.selected td.actions but
 
 /* modals */
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 10; }
+#browser { z-index: 20; } /* the file picker opens on top of the add-scenes and settings dialogs */
 .dialog { background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; width: min(760px, 92vw); max-height: 88vh; display: flex; flex-direction: column; padding: 14px 16px; }
 .dialog-head { display: flex; align-items: center; margin-bottom: 8px; }
 .dialog-head h2 { margin: 0; flex: 1; font-size: 16px; }
@@ -155,5 +157,5 @@ table.scenes tr:hover td.actions button, table.scenes tr.selected td.actions but
 .browser-list .entry .mt { margin-left: auto; color: var(--muted); font-size: 12px; }
 .browser-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .browser-foot label { display: flex; align-items: center; gap: 6px; }
-.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #3a2a2a; border: 1px solid var(--err); color: var(--text); padding: 8px 14px; border-radius: 6px; z-index: 20; }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #3a2a2a; border: 1px solid var(--err); color: var(--text); padding: 8px 14px; border-radius: 6px; z-index: 30; }
 .toast.ok { background: #27402b; border-color: var(--ok); }

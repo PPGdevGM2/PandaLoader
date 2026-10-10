@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v={{v}}">
 </head>
 <body>
 
@@ -175,7 +175,10 @@
         <label>Attempts per scene<input id="sAttempts" type="number" min="1" max="5"></label>
         <label>Image size override <span class="hint">empty = preset</span><input id="sSize" type="text" placeholder="e.g. 960x540"></label>
       </div>
-      <label>DAZ Studio executable<input id="sDaz" type="text" class="mono"></label>
+      <div class="grid2">
+        <label>DAZ Studio executable<input id="sDaz" type="text" class="mono"></label>
+        <label>Web UI port <span class="hint">the page reloads on the new port</span><input id="sPort" type="number" min="1024" max="65535"></label>
+      </div>
       <div class="hint" id="sInfo"></div>
       <div class="row buttons"><span class="spacer"></span><button type="button" data-close>Cancel</button><button type="submit" class="primary">Save</button></div>
     </form>
@@ -183,6 +186,6 @@
 </div>
 
 <div class="toast" id="toast" hidden></div>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v={{v}}"></script>
 </body>
 </html>

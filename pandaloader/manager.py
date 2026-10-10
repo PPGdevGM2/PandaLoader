@@ -13,7 +13,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from . import dufinfo
 from .config import Config, WorkerSlot
@@ -42,6 +42,7 @@ class Manager:
         self._state_file = Path(cfg.work_dir) / "manager-state.json"
         self.recent: List[str] = []
         self._mtime_cache: dict = {}
+        self.on_port_change: Optional[Callable[[int], None]] = None  # set by the host (tray/serve) to rebind
         self._load_state()
         for slot in cfg.workers:
             self.status.add_worker(slot.name, slot.gpu)
@@ -56,7 +57,7 @@ class Manager:
             last = d.get("lastQueue")
             if last and Path(last).exists():
                 self.queue = QueueFile.load(last)
-                self.status.set_queue(last, self.queue.counts(), self.queue.average_secs())
+                self.status.set_queue(Path(last).as_posix(), self.queue.counts(), self.queue.average_secs())
         except (OSError, ValueError):
             pass
 
@@ -141,7 +142,8 @@ class Manager:
 
     def _publish(self) -> None:
         if self.queue is not None:
-            self.status.set_queue(str(self.queue.path or ""), self.queue.counts(), self.queue.average_secs())
+            path = self.queue.path.as_posix() if self.queue.path else ""
+            self.status.set_queue(path, self.queue.counts(), self.queue.average_secs())
 
     # -- run control -------------------------------------------------------------
     def start(self) -> None:
@@ -314,8 +316,16 @@ class Manager:
     def update_settings(self, workers: Optional[List[dict]] = None, shutdown_after_queue: Optional[bool] = None,
                         job_timeout_s: Optional[float] = None, stall_timeout_s: Optional[float] = None,
                         max_attempts: Optional[int] = None, image_size: Optional[list] = None,
-                        daz_exe: Optional[str] = None) -> None:
+                        daz_exe: Optional[str] = None, web_port: Optional[int] = None) -> None:
         with self.lock:
+            if web_port is not None and int(web_port) != self.cfg.web_port:
+                port = int(web_port)
+                if not 1024 <= port <= 65535:
+                    raise ManagerError("port must be between 1024 and 65535")
+                if self.on_port_change is not None:
+                    self.on_port_change(port)  # raises ManagerError when the port is taken
+                self.cfg.web_port = port
+                self.status.log(f"web port set to {port}")
             if workers is not None:
                 if self.running:
                     raise ManagerError("cannot change workers while rendering")
@@ -328,12 +338,18 @@ class Manager:
                     slots.append(WorkerSlot(name, None if gpu in (None, "", "all") else int(gpu)))
                 if not slots:
                     raise ManagerError("at least one worker is needed")
+                if [w.to_dict() for w in slots] != [w.to_dict() for w in self.cfg.workers]:
+                    self.status.log("workers set to " + ", ".join(
+                        f"{w.name}({'gpu ' + str(w.gpu) if w.gpu is not None else 'all'})" for w in slots))
                 self.cfg.workers = slots
                 self.status = self._fresh_status()
                 self._publish()
-            if shutdown_after_queue is not None:
+            if shutdown_after_queue is not None and bool(shutdown_after_queue) != self.cfg.shutdown_after_queue:
                 self.cfg.shutdown_after_queue = bool(shutdown_after_queue)
                 self.status.shutdown_after_queue = self.cfg.shutdown_after_queue
+                self.status.log("shutdown after queue " + ("enabled" if self.cfg.shutdown_after_queue else "disabled"))
+            if image_size is not None and (tuple(image_size) if image_size else None) != self.cfg.image_size:
+                self.status.log("image size override " + ("x".join(str(x) for x in image_size) if image_size else "cleared"))
             if job_timeout_s:
                 self.cfg.job_timeout_s = float(job_timeout_s)
             if stall_timeout_s:
@@ -348,36 +364,63 @@ class Manager:
 
     # -- browsing / lookups --------------------------------------------------------
     def browse(self, directory: Optional[str], kind: str = "scene") -> dict:
-        d = Path(directory) if directory else (self._default_browse_dir())
-        if not d.exists() or not d.is_dir():
-            raise ManagerError(f"not a folder: {d}")
-        dirs, files = [], []
+        """List a folder for the file picker. Any folder that cannot be used
+        (missing, a file, unreadable, unreachable drive, garbage text) silently
+        falls back to the user's Documents folder."""
+        requested = directory
         try:
-            for entry in sorted(d.iterdir(), key=lambda p: p.name.lower()):
-                if entry.name.startswith(".") or entry.name.startswith("$"):
-                    continue
-                if entry.is_dir():
-                    dirs.append(entry.name)
-                elif kind == "scene" and entry.suffix.lower() in SCENE_EXTS:
-                    files.append({"name": entry.name, "mtime": entry.stat().st_mtime})
-                elif kind == "queue" and entry.name.lower().endswith(QUEUE_SUFFIX):
-                    files.append({"name": entry.name, "mtime": entry.stat().st_mtime})
-                elif kind == "any":
-                    files.append({"name": entry.name, "mtime": entry.stat().st_mtime})
-        except PermissionError:
-            raise ManagerError(f"no access to {d}")
+            d = Path(directory) if directory else self._default_browse_dir(kind)
+            if d.is_file():
+                d = d.parent
+            listing = self._list_dir(d, kind)
+        except (OSError, ValueError):
+            listing = None
+        if listing is None:
+            d = documents_dir()
+            try:
+                listing = self._list_dir(d, kind)
+            except (OSError, ValueError):
+                d = Path.home()
+                listing = self._list_dir(d, kind)
+        dirs, files = listing
         parent = d.parent if d.parent != d else None
         return {"dir": d.as_posix(), "parent": parent.as_posix() if parent else None, "dirs": dirs, "files": files,
-                "drives": _drives()}
+                "drives": _drives(), "fallback": bool(requested) and Path(requested) != d and d == documents_dir()}
 
-    def _default_browse_dir(self) -> Path:
+    @staticmethod
+    def _list_dir(d: Path, kind: str) -> tuple:
+        """(dirs, files) of a folder; raises OSError when it cannot be read."""
+        if not d.is_dir():
+            raise NotADirectoryError(str(d))
+        dirs, files = [], []
+        for entry in sorted(d.iterdir(), key=lambda p: p.name.lower()):
+            if entry.name.startswith(".") or entry.name.startswith("$"):
+                continue
+            try:
+                if entry.is_dir():
+                    dirs.append(entry.name)
+                    continue
+                if (kind == "scene" and entry.suffix.lower() in SCENE_EXTS) or \
+                   (kind == "queue" and entry.name.lower().endswith(QUEUE_SUFFIX)) or kind == "any":
+                    files.append({"name": entry.name, "mtime": entry.stat().st_mtime})
+            except OSError:
+                continue  # one unreadable entry must not sink the listing
+        return dirs, files
+
+    def _default_browse_dir(self, kind: str = "scene") -> Path:
         if self.queue is not None:
+            candidates = []
+            if self.queue.path:
+                candidates.append(self.queue.path.parent)
             for s in reversed(self.queue.scenes):
-                if Path(s.file).parent.exists():
-                    return Path(s.file).parent
-            if self.queue.path and self.queue.path.parent.exists():
-                return self.queue.path.parent
-        return Path.home()
+                candidates.append(Path(s.file).parent)
+                break
+            if kind != "queue":
+                candidates.reverse()  # scene picker: scene folder first, queue folder second
+            for c in candidates:
+                if c.is_dir():
+                    return c
+        return documents_dir()
 
     def scene_cameras(self, index: int) -> dict:
         sc = self._scene(index)
@@ -464,6 +507,22 @@ def _gpus() -> list:
         pass
     _GPU_CACHE.update(t=time.time(), v=out)
     return out
+
+
+def documents_dir() -> Path:
+    """The user's Documents folder (Windows known folder), falling back to the home dir."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
+            # CSIDL_PERSONAL = 5 -> "My Documents", honours a relocated Documents folder
+            if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and buf.value:
+                return Path(buf.value)
+        except (OSError, AttributeError):
+            pass
+    d = Path.home() / "Documents"
+    return d if d.is_dir() else Path.home()
 
 
 def _drives() -> list:
