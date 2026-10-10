@@ -169,7 +169,12 @@ function workerCard(w) {
   let frac = 0;
   if (st === "starting") frac = 0.03;
   else if (st === "loading") frac = 0.1;
-  else if (st === "rendering") frac = 0.1 + 0.88 * Math.min(1, w.expectedSecs ? w.renderElapsed / w.expectedSecs : 0);
+  else if (st === "rendering") {
+    if (w.frames) {
+      const per = w.expectedSecs / w.frames;
+      frac = 0.1 + 0.88 * Math.min(1, (w.framesDone + Math.min(1, per ? w.renderElapsed / per : 0)) / w.frames);
+    } else frac = 0.1 + 0.88 * Math.min(1, w.expectedSecs ? w.renderElapsed / w.expectedSecs : 0);
+  }
   else if (st === "saving" || st === "finished") frac = 1;
   const gpu = w.gpu == null ? "all GPUs" : `GPU ${w.gpu}`;
   if (st === "idle") {
@@ -182,7 +187,7 @@ function workerCard(w) {
   return `<div class="worker ${st}">
     <div class="head"><span class="wname">${esc(w.name)}</span><span class="gpu">${gpu}</span><span class="phase ${st}">${st}</span>${gaugeToggle(w)}</div>
     <div class="body"><div class="main">
-    <div class="scene">${esc(w.sceneName)}<span class="cam">${esc(w.camera || "")}</span></div>
+    <div class="scene">${esc(w.sceneName)}${w.frames ? ` <span class="hint">frame ${w.frame} · ${w.framesDone}/${w.frames} of this block</span>` : ""}<span class="cam">${esc(w.camera || "")}</span></div>
     <div class="bar"><i style="width:${(frac * 100).toFixed(1)}%"></i></div>
     <div class="stats">
       <span>iterations <b>${Math.round(w.iterations)}</b></span>
@@ -207,7 +212,11 @@ function sceneRow(sc, find) {
   const stateTxt = sc.stateName === "running" && sc.worker ? `${sc.worker}` : sc.stateName;
   const cam = sc.savedCamera ? (sc.camera ? `${esc(sc.camera)} <span class="hint">(saved)</span>` : `<span class="hint">saved with scene</span>`) : `<b>${esc(sc.camera)}</b>`;
   const assets = sc.postLoaders.length ? `${sc.postLoaders.length} PRA` : "";
-  const last = sc.lastSecs ? hms(sc.lastSecs) : "";
+  let last = sc.lastSecs ? hms(sc.lastSecs) : "";
+  if (sc.anim) {
+    const frac = sc.framesTotal ? sc.framesDone / sc.framesTotal : 0;
+    last = `<span class="frames-cell" title="animation: frames ${sc.frameFirst}-${sc.frameLast}${sc.lastSecs ? `, ${hms(sc.lastSecs)} per frame` : ""}"><span class="fbar"><i style="width:${(frac * 100).toFixed(0)}%"></i></span>${sc.framesDone}/${sc.framesTotal} frames</span>`;
+  }
   const err = sc.lastError ? ` title="${esc(sc.lastError)}"` : "";
   const dnMark = sc.denoised === true ? `<span class="dnok" title="denoised">✓</span>` : sc.denoised === false ? `<span class="dnfail" title="denoise failed, see queue log">!</span>`
     : (sc.denoise && sc.stateName === "done") ? `<span class="dnwait" title="waiting: will be denoised by the next run">…</span>` : "";
@@ -236,7 +245,8 @@ function renderDetails(sc, full) {
   d.hidden = false;
   $("dTitle").textContent = sc.name;
   $("dFile").textContent = sc.file;
-  $("dState").innerHTML = `<span class="badge ${sc.stateName}">${sc.stateName}</span>` + (sc.lastSecs ? ` last render ${hms(sc.lastSecs)}` : "");
+  $("dState").innerHTML = `<span class="badge ${sc.stateName}">${sc.stateName}</span>`
+    + (sc.anim ? ` animation ${sc.framesDone}/${sc.framesTotal} frames` : "") + (sc.lastSecs ? ` · last render ${hms(sc.lastSecs)}${sc.anim ? "/frame" : ""}` : "");
   $("dError").textContent = sc.lastError || "";
   const img = $("dThumb");
   if (sc.targetExists) {
@@ -252,6 +262,10 @@ function renderDetails(sc, full) {
     $("dAssets").value = sc.postLoaders.join("\n");
     $("dDenoise").checked = !!sc.denoise;
     $("dDenoiseHint").textContent = state.config.denoiserValid ? (sc.denoised === true ? "last render was denoised" : sc.denoised === false ? "last denoise failed, see queue log" : "") : "no valid denoiser path in Settings";
+    $("dAnim").checked = !!sc.anim; $("dFrameFirst").value = sc.frameFirst; $("dFrameLast").value = sc.frameLast;
+    $("dFrameRow").hidden = !sc.anim;
+    $("dAnimHint").textContent = sc.anim ? `frames ${sc.frameFirst}-${sc.frameLast}, files ${sc.name}_NN.png` : "one image per frame, split across workers";
+    $("dFrameHint").textContent = sc.anim && sc.framesDone ? `${sc.framesDone} done; a wider range renders only the missing frames` : "";
     const sel = $("dCamera");
     sel.innerHTML = `<option value="">camera saved with scene${sc.savedCamera && sc.camera ? ` (${esc(sc.camera)})` : ""}</option>`;
     if (!sc.savedCamera && sc.camera) sel.add(new Option(sc.camera, sc.camera, true, true));
@@ -477,8 +491,10 @@ document.addEventListener("keydown", (e) => {
 $("dClose").onclick = () => { selected = null; $("details").hidden = true; render(); };
 $("dForm").onsubmit = (e) => {
   e.preventDefault();
-  act(`/api/scene/${selected}/edit`, { target: $("dTarget").value.trim(), postLoaders: $("dAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), camera: $("dCamera").value, denoise: $("dDenoise").checked }, "scene saved");
+  act(`/api/scene/${selected}/edit`, { target: $("dTarget").value.trim(), postLoaders: $("dAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), camera: $("dCamera").value, denoise: $("dDenoise").checked,
+    anim: $("dAnim").checked, frameFirst: Number($("dFrameFirst").value), frameLast: Number($("dFrameLast").value) }, "scene saved");
 };
+$("dAnim").onchange = () => { $("dFrameRow").hidden = !$("dAnim").checked; };
 $("dReset").onclick = () => act(`/api/scene/${selected}/reset`);
 $("dDone").onclick = () => act(`/api/scene/${selected}/done`);
 $("dRemove").onclick = async () => { if (confirm("Remove this scene?")) { await act(`/api/scene/${selected}/remove`); selected = null; $("details").hidden = true; render(); } };
@@ -497,6 +513,7 @@ $("btnAdd").onclick = () => {
   $("aTargetDir").value = sc && sc.target ? dirname(sc.target) : "";
   $("aAssets").value = sc ? sc.postLoaders.join("\n") : "";
   $("aFiles").value = "";
+  $("aAnimBox").hidden = true; $("aAnim").checked = false; $("aFrameRow").hidden = true; animInfoFor = null;
   $("aDenoise").checked = sc ? !!sc.denoise : false;
   $("aDenoiseHint").textContent = state.config.denoiserValid ? "" : "no valid denoiser path in Settings: the flag is kept but skipped";
   $("addDlg").hidden = false;
@@ -504,7 +521,32 @@ $("btnAdd").onclick = () => {
 $("aBrowse").onclick = async () => {
   const files = await browser.open({ title: "Pick scene files", kind: "scene", multi: true });
   if (files && files.length) $("aFiles").value = ($("aFiles").value.trim() ? $("aFiles").value.trim() + "\n" : "") + files.join("\n");
+  updateAddAnim();
 };
+// Animation is offered when exactly one scene is being added: the timeline is read from the .duf.
+let animInfoFor = null;
+async function updateAddAnim() {
+  const files = $("aFiles").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  const box = $("aAnimBox");
+  if (files.length !== 1) { box.hidden = true; $("aAnim").checked = false; animInfoFor = null; return; }
+  if (animInfoFor === files[0]) return;
+  animInfoFor = files[0];
+  // the timeline comes from the .duf itself; big scenes take a few seconds to parse
+  box.hidden = false; $("aAnim").checked = false; $("aAnim").disabled = true; $("aFrameRow").hidden = true;
+  $("aAnimHint").textContent = "reading the scene's timeline…";
+  try {
+    const info = await api(`/api/animinfo?file=${encodeURIComponent(files[0])}`);
+    if (animInfoFor !== files[0]) return;
+    $("aAnim").disabled = false;
+    $("aAnimHint").textContent = `${info.changing} of ${info.tracks} tracks change over the play range ${info.frameFirst}-${info.frameLast} at ${info.fps} fps`;
+    $("aFrameFirst").value = info.frameFirst; $("aFrameLast").value = info.frameLast;
+    $("aFrameHint").textContent = `${info.frameLast - info.frameFirst + 1} frames, files <scene>_NN.png`;
+    $("aAnim").checked = false; $("aFrameRow").hidden = true;
+  } catch (e) { if (animInfoFor === files[0]) { $("aAnimHint").textContent = `timeline not readable: ${e.message}`; $("aAnim").disabled = true; } }
+}
+$("aFiles").addEventListener("change", updateAddAnim);
+$("aFiles").addEventListener("blur", updateAddAnim);
+$("aAnim").onchange = () => { $("aFrameRow").hidden = !$("aAnim").checked; };
 $("aTargetBrowse").onclick = async () => {
   const d = await browser.open({ title: "Target folder", dirsOnly: true, start: $("aTargetDir").value || null });
   if (d) $("aTargetDir").value = d;
@@ -517,7 +559,8 @@ $("addForm").onsubmit = async (e) => {
   e.preventDefault();
   const files = $("aFiles").value.split("\n").map((s) => s.trim()).filter(Boolean);
   if (!files.length) { toast("no scene files"); return; }
-  const d = await act("/api/scenes/add", { files, targetDir: $("aTargetDir").value.trim() || null, postLoaders: $("aAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), atTop: $("aTop").checked, denoise: $("aDenoise").checked });
+  const anim = files.length === 1 && !$("aAnimBox").hidden && $("aAnim").checked ? { frameFirst: Number($("aFrameFirst").value), frameLast: Number($("aFrameLast").value) } : null;
+  const d = await act("/api/scenes/add", { files, targetDir: $("aTargetDir").value.trim() || null, postLoaders: $("aAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), atTop: $("aTop").checked, denoise: $("aDenoise").checked, anim });
   if (d) { toast(`${d.added} scene(s) added`, true); $("addDlg").hidden = true; }
 };
 

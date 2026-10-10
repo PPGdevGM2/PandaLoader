@@ -120,6 +120,14 @@
         </span>
       </label>
       <label class="check"><input type="checkbox" id="dDenoise"> Post-render denoise <span class="hint" id="dDenoiseHint"></span></label>
+      <div class="animbox">
+        <label class="check"><input type="checkbox" id="dAnim"> Render animation <span class="hint" id="dAnimHint"></span></label>
+        <div class="row frames" id="dFrameRow" hidden>
+          <label>First frame<input id="dFrameFirst" type="number" min="0" step="1"></label>
+          <label>Last frame<input id="dFrameLast" type="number" min="0" step="1"></label>
+          <span class="hint" id="dFrameHint"></span>
+        </div>
+      </div>
       <div class="row buttons">
         <button type="submit" class="primary">Save</button>
         <button type="button" id="dReset">Reset to pending</button>
@@ -177,6 +185,14 @@
       <label>Pre-render assets (one per line)
         <span class="row"><textarea id="aAssets" rows="2" class="mono grow"></textarea><button type="button" id="aAssetBrowse">Browse…</button></span>
       </label>
+      <div class="animbox" id="aAnimBox" hidden>
+        <label class="check"><input type="checkbox" id="aAnim"> Render animation <span class="hint" id="aAnimHint"></span></label>
+        <div class="row frames" id="aFrameRow" hidden>
+          <label>First frame<input id="aFrameFirst" type="number" min="0" step="1"></label>
+          <label>Last frame<input id="aFrameLast" type="number" min="0" step="1"></label>
+          <span class="hint" id="aFrameHint"></span>
+        </div>
+      </div>
       <label class="check"><input type="checkbox" id="aDenoise"> Post-render denoise <span class="hint" id="aDenoiseHint"></span></label>
       <label class="check"><input type="checkbox" id="aTop"> Insert at the top of the queue</label>
       <div class="row buttons"><span class="spacer"></span><button type="button" data-close>Cancel</button><button type="submit" class="primary">Add</button></div>

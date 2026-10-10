@@ -76,6 +76,71 @@ class Scene:
     def name(self) -> str:
         return Path(self.file).stem
 
+    # -- animation (plugin keys anim/frameFirst/frameLast; framesDone is ours) -----
+    @property
+    def anim(self) -> bool:
+        return bool(self.data.get("anim", False))
+
+    def set_anim(self, on: bool, frame_first: Optional[int] = None, frame_last: Optional[int] = None) -> None:
+        """Switch animation rendering on/off and optionally set the inclusive frame range.
+        Off keeps the range keys (the plugin always writes them) and forgets frame progress."""
+        if on:
+            self.data["anim"] = True
+        else:
+            self.data.pop("anim", None)
+            self.data.pop("framesDone", None)
+        if frame_first is not None:
+            self.data["frameFirst"] = int(frame_first)
+        if frame_last is not None:
+            self.data["frameLast"] = int(frame_last)
+        if self.frame_last < self.frame_first:
+            self.data["frameLast"] = self.frame_first
+
+    @property
+    def frame_first(self) -> int:
+        return int(self.data.get("frameFirst", 0))
+
+    @property
+    def frame_last(self) -> int:
+        return int(self.data.get("frameLast", 0))
+
+    @property
+    def frames(self) -> list:
+        """All frames of the animation, inclusive range."""
+        return list(range(self.frame_first, self.frame_last + 1)) if self.anim else []
+
+    @property
+    def frames_done(self) -> list:
+        return sorted(int(f) for f in self.data.get("framesDone", []))
+
+    def frames_remaining(self) -> list:
+        done = set(self.frames_done)
+        return [f for f in self.frames if f not in done]
+
+    @property
+    def frame_pad(self) -> int:
+        """Digits in frame file names: at least 2 (Scene_00.png), more for long animations."""
+        return max(2, len(str(abs(self.frame_last))))
+
+    def frame_target(self, frame: int) -> str:
+        """<dir>/<stem>_<NN>.png next to the (base) target."""
+        p = Path(self.target)
+        return p.with_name(f"{p.stem}_{int(frame):0{self.frame_pad}d}{p.suffix or '.png'}").as_posix()
+
+    def mark_frames_done(self, frames: Iterable[int], secs_each: Optional[float], camera_label: str) -> None:
+        """Record finished frames; the scene becomes done when none remain."""
+        done = set(self.frames_done)
+        for f in frames:
+            done.add(int(f))
+            self.data.setdefault("secsRender", []).append({
+                "type": "scene", "asset": "", "cam": camera_label, "frame": int(f),
+                "secs": int(round(secs_each)) if secs_each else 0,
+            })
+        self.data["framesDone"] = sorted(done)
+        if not self.frames_remaining():
+            self.state = STATE_DONE
+            self.data.pop("lastError", None)
+
     @property
     def last_error(self) -> str:
         return self.data.get("lastError", "")
@@ -114,6 +179,10 @@ class Scene:
         as such and is retried only after the flag is switched off and on again."""
         return self.is_done and self.denoise and self.denoised is None and bool(self.target)
 
+    def output_files(self) -> list:
+        """The rendered file(s): one target, or one per frame of an animation."""
+        return [self.frame_target(f) for f in self.frames] if self.anim else ([self.target] if self.target else [])
+
     # -- camera --------------------------------------------------------------
     @property
     def uses_saved_camera(self) -> bool:
@@ -142,8 +211,12 @@ class Scene:
     def mark_running(self) -> None:
         self.state = STATE_RUNNING
 
-    def mark_pending(self) -> None:
+    def mark_pending(self, keep_frames: bool = True) -> None:
+        """Back to pending. For an animation the finished frames are kept unless told
+        otherwise (a user reset re-renders everything; a crash recovery resumes)."""
         self.state = STATE_PENDING
+        if not keep_frames:
+            self.data.pop("framesDone", None)
 
     def mark_done(self, secs: float, camera_label: str, frame: int = 0) -> None:
         self.state = STATE_DONE
@@ -162,6 +235,8 @@ class Scene:
             "state": self.state, "stateName": self.state_name, "camera": self.camera_hint,
             "lastSecs": self.last_secs, "lastError": self.last_error,
             "denoise": self.denoise, "denoised": self.denoised,
+            "anim": self.anim, "frameFirst": self.frame_first, "frameLast": self.frame_last,
+            "framesTotal": len(self.frames), "framesDone": len(self.frames_done),
         }
 
 
@@ -222,14 +297,16 @@ class QueueFile:
         return Scene(self.data["scenes"][index], index)
 
     def add_scene(self, file: str, target: str, post_loaders: Iterable[str] = (), frame_first: int = 0,
-                  frame_last: int = 30, denoise: bool = False) -> Scene:
+                  frame_last: int = 30, denoise: bool = False, anim: bool = False) -> Scene:
         entry = {
             "file": file, "state": STATE_PENDING, "target": target, "jobs": [], "cam": 1,
-            "singleCamName": 0, "singleFrame": -1, "frameFirst": frame_first, "frameLast": frame_last,
+            "singleCamName": 0, "singleFrame": -1, "frameFirst": int(frame_first), "frameLast": int(frame_last),
             "postLoaders": [{"asset": a, "node": ""} for a in post_loaders], "secsRender": [],
         }
         if denoise:
             entry["denoise"] = True
+        if anim:
+            entry["anim"] = True
         self.data["scenes"].append(entry)
         return Scene(entry, len(self.data["scenes"]) - 1)
 
@@ -260,15 +337,19 @@ class QueueFile:
         n = 0
         for s in self.scenes:
             if s.state == STATE_FAILED or (not failed_only and s.state != STATE_PENDING):
-                s.mark_pending()
+                s.mark_pending(keep_frames=failed_only)
                 s.data.pop("lastError", None)
                 n += 1
         return n
 
     def counts(self) -> dict:
-        c = {"total": 0, "pending": 0, "running": 0, "done": 0, "failed": 0, "toDenoise": 0}
+        c = {"total": 0, "pending": 0, "running": 0, "done": 0, "failed": 0, "toDenoise": 0,
+             "framesTotal": 0, "framesDone": 0}
         for s in self.scenes:
             c["total"] += 1
+            if s.anim:
+                c["framesTotal"] += len(s.frames)
+                c["framesDone"] += len(s.frames_done)
             if s.needs_denoise:
                 c["toDenoise"] += 1
             if s.is_done:

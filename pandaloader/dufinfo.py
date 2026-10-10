@@ -86,3 +86,56 @@ def preset_render_info(path, doc: Optional[dict] = None) -> dict:
                 elif cid == "Rendering Converged Ratio":
                     info["converged_ratio"] = float(val)
     return info
+
+
+# -- timeline / keyframes ----------------------------------------------------------
+def anim_info(path, doc: Optional[dict] = None) -> dict:
+    """Timeline facts of a scene: fps, play range in frames, and whether any track
+    actually changes value over time (DAZ writes a key on every frame for many
+    props even in a static scene, so "has keys" alone means nothing).
+
+    {"fps": 30, "frameFirst": 0, "frameLast": 16, "animFrameLast": 16,
+     "tracks": 3661, "changing": 128, "animated": True, "currentFrame": 0}
+    """
+    doc = doc if doc is not None else load_duf(path)
+    scene = doc.get("scene", {}) or {}
+    fps = 30.0
+    play = [0.0, 1.0]
+    anim_range = None
+    current_time = 0.0
+    for ex in scene.get("extra", []) or []:
+        if ex.get("type") == "studio_scene_settings":
+            a = ex.get("animation_settings", {}) or {}
+            fps = float(a.get("current_frames_per_second", fps) or fps)
+            play = list(a.get("play_range", play) or play)
+            anim_range = a.get("animation_range")
+            current_time = float(a.get("current_time", 0.0) or 0.0)
+            break
+    tracks = scene.get("animations", []) or []
+    changing = 0
+    for t in tracks:
+        keys = t.get("keys") or []
+        if len(keys) < 2:
+            continue
+        first = keys[0][1] if len(keys[0]) > 1 else None
+        for k in keys[1:]:
+            v = k[1] if len(k) > 1 else None
+            if _differs(first, v):
+                changing += 1
+                break
+
+    def frame(t: float) -> int:
+        return int(round(float(t) * fps))
+
+    out = {
+        "fps": fps, "frameFirst": frame(play[0]), "frameLast": frame(play[1]),
+        "animFrameLast": frame((anim_range or play)[1]), "currentFrame": frame(current_time),
+        "tracks": len(tracks), "changing": changing, "animated": changing > 0,
+    }
+    return out
+
+
+def _differs(a, b, eps: float = 1e-6) -> bool:
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool) and not isinstance(b, bool):
+        return abs(float(a) - float(b)) > eps
+    return a != b

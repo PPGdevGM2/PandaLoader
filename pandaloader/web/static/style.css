@@ -233,3 +233,13 @@ table.scenes td.dn input { vertical-align: middle; cursor: pointer; }
 .browser-foot label { display: flex; align-items: center; gap: 6px; }
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #3a2a2a; border: 1px solid var(--err); color: var(--text); padding: 8px 14px; border-radius: 6px; z-index: 30; }
 .toast.ok { background: #27402b; border-color: var(--ok); }
+
+/* animation controls */
+.animbox { margin: 6px 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; }
+.animbox .frames { align-items: flex-end; gap: 12px; margin-top: 4px; }
+.animbox .frames label { margin: 0; }
+.animbox .frames input { width: 90px; flex: none; }
+.animbox .frames .hint { align-self: center; }
+.frames-cell { white-space: nowrap; }
+.frames-cell .fbar { display: inline-block; width: 60px; height: 6px; background: #151517; border-radius: 3px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
+.frames-cell .fbar i { display: block; height: 100%; background: var(--run); }

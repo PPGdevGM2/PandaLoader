@@ -251,7 +251,15 @@ class Manager:
         return self.scheduler.qlock if self.scheduler is not None else self.lock
 
     def add_scenes(self, files: List[str], target_dir: Optional[str] = None,
-                   post_loaders: Optional[List[str]] = None, at_top: bool = False, denoise: bool = False) -> int:
+                   post_loaders: Optional[List[str]] = None, at_top: bool = False, denoise: bool = False,
+                   anim: Optional[dict] = None) -> int:
+        """anim: {"frameFirst": a, "frameLast": b} renders the (single) scene as an animation."""
+        anim_range = None
+        if anim and len(files) == 1:
+            a, b = int(anim.get("frameFirst", 0)), int(anim.get("frameLast", 0))
+            if b < a:
+                raise ManagerError("last frame must not be before the first frame")
+            anim_range = (a, b)
         with self.lock, self._qlock():
             q = self._require_queue()
             if post_loaders is None:
@@ -266,7 +274,11 @@ class Manager:
                 if any(Path(s.file) == p for s in q.scenes):
                     continue
                 target = (tdir / (p.stem + ".png")).as_posix() if tdir else ""
-                sc = q.add_scene(p.as_posix(), target, post_loaders, denoise=denoise)
+                if anim_range:
+                    sc = q.add_scene(p.as_posix(), target, post_loaders, denoise=denoise, anim=True,
+                                     frame_first=anim_range[0], frame_last=anim_range[1])
+                else:
+                    sc = q.add_scene(p.as_posix(), target, post_loaders, denoise=denoise)
                 new_entries.append(sc.data)
                 added += 1
             if at_top and new_entries:
@@ -335,7 +347,7 @@ class Manager:
             sc = self._scene(index)
             if sc.state == STATE_RUNNING:
                 raise ManagerError("scene is rendering")
-            sc.mark_pending()
+            sc.mark_pending(keep_frames=False)
             sc.data.pop("lastError", None)
             self._commit(f"reset {sc.name} to pending")
 
@@ -392,7 +404,8 @@ class Manager:
             self._commit()
 
     def edit_scene(self, index: int, target: Optional[str] = None, post_loaders: Optional[List[str]] = None,
-                   camera: Optional[str] = None, denoise: Optional[bool] = None) -> None:
+                   camera: Optional[str] = None, denoise: Optional[bool] = None, anim: Optional[bool] = None,
+                   frame_first: Optional[int] = None, frame_last: Optional[int] = None) -> None:
         """camera: '' or None keeps 'camera saved with scene'; a label forces that camera."""
         with self.lock, self._qlock():
             sc = self._scene(index)
@@ -400,6 +413,16 @@ class Manager:
                 raise ManagerError("scene is rendering")
             if denoise is not None:
                 sc.denoise = bool(denoise)
+            if anim is not None or frame_first is not None or frame_last is not None:
+                on = sc.anim if anim is None else bool(anim)
+                a = sc.frame_first if frame_first is None else int(frame_first)
+                b = sc.frame_last if frame_last is None else int(frame_last)
+                if on and b < a:
+                    raise ManagerError("last frame must not be before the first frame")
+                if on != sc.anim or a != sc.frame_first or b != sc.frame_last:
+                    if sc.is_done and on:
+                        sc.mark_pending(keep_frames=True)  # new/changed range: render what is missing
+                    sc.set_anim(on, a, b)
             if target is not None:
                 sc.target = Path(target).as_posix() if target else ""
             if post_loaders is not None:
@@ -588,16 +611,26 @@ class Manager:
                     return c
         return documents_dir()
 
+    def scene_animinfo(self, file: str) -> dict:
+        """Timeline facts of a scene file (for the Add dialog), see dufinfo.anim_info."""
+        p = Path(file)
+        if p.suffix.lower() not in SCENE_EXTS or not p.is_file():
+            raise ManagerError(f"not a scene file: {file}")
+        return dufinfo.anim_info(p)
+
     def scene_cameras(self, index: int) -> dict:
         sc = self._scene(index)
         doc = dufinfo.load_duf(sc.file)
         return {"current": dufinfo.current_camera_label(sc.file, doc), "cameras": dufinfo.camera_labels(sc.file, doc)}
 
+    def display_file(self, sc) -> Optional[Path]:
+        return _display_file(sc)
+
     def thumbnail(self, index: int, width: int = 400) -> Optional[Path]:
         """Cached scaled copy of a scene's rendered target, or None if not rendered yet."""
         sc = self._scene(index)
-        target = Path(sc.target)
-        if not target.exists():
+        target = self.display_file(sc)
+        if target is None:
             return None
         from PIL import Image  # optional dependency only needed here
         cache = Path(self.cfg.work_dir) / "thumbs"
@@ -641,8 +674,10 @@ class Manager:
                     d["postLoaders"] = s.post_loaders
                     d["savedCamera"] = s.uses_saved_camera
                     d["worker"] = running_index.get(s.index)
-                    d["targetExists"] = Path(s.target).exists() if s.target else False
-                    d["denoisedFile"] = _denoised_file(s.target)
+                    shown = _display_file(s)
+                    d["targetExists"] = shown is not None
+                    d["shownFile"] = shown.as_posix() if shown else None
+                    d["denoisedFile"] = _denoised_file(s.target) if not s.anim else None
                     scenes.append(d)
                 snap["queue"]["log"] = q.data.get("log", [])[-30:]
             snap["scenes"] = scenes
@@ -660,6 +695,18 @@ class Manager:
             }
             snap["gpus"] = _gpus()
             return snap
+
+
+def _display_file(sc) -> Optional[Path]:
+    """The image to show for a scene: its target, or the latest finished frame of an animation."""
+    if sc.anim:
+        for f in reversed(sc.frames_done):
+            p = Path(sc.frame_target(f))
+            if p.is_file():
+                return p
+        return None
+    p = Path(sc.target) if sc.target else None
+    return p if p and p.is_file() else None
 
 
 def _denoised_file(target: str) -> Optional[str]:
