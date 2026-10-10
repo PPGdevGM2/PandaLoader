@@ -119,6 +119,7 @@ class TrayApp:
             item("Resume", self._safe(m.resume), visible=lambda _: m.running and m.status.paused),
             item("Stop (kill renders)", self._safe(m.stop), visible=lambda _: m.running),
             item("Shut down PC after queue", self.toggle_shutdown, checked=lambda _: m.cfg.shutdown_after_queue),
+            item("ABORT PC SHUTDOWN", self._safe(m.abort_shutdown), visible=lambda _: m.shutdown_pending),
             pystray.Menu.SEPARATOR,
             item(lambda _: f"Port {m.cfg.web_port}", pystray.Menu(self._port_items)),
             pystray.Menu.SEPARATOR,
@@ -229,7 +230,15 @@ class TrayApp:
             return "done", 0.0
         return "idle", 0.0
 
+    def _menu_signature(self) -> tuple:
+        """Everything the menu displays or hides. Rebuilding the menu while it is open
+        kills the hover highlight, so it is rebuilt only when this changes."""
+        m, st = self.manager, self.manager.status
+        return (m.running, st.paused, m.queue is not None, self._headline(), m.cfg.shutdown_after_queue,
+                m.cfg.web_port, m.shutdown_pending)
+
     def _ticker(self) -> None:
+        menu_sig = None
         while not self._stop.is_set():
             try:
                 state, frac = self._state_and_progress()
@@ -237,8 +246,13 @@ class TrayApp:
                 if key != self._icon_key:
                     self._icon_key = key
                     self.icon.icon = draw_icon(self.logo, state, frac)
-                self.icon.title = self.manager.status.tooltip()
-                self.icon.update_menu()
+                tooltip = self.manager.status.tooltip()
+                if tooltip != self.icon.title:
+                    self.icon.title = tooltip
+                sig = self._menu_signature()
+                if sig != menu_sig:
+                    menu_sig = sig
+                    self.icon.update_menu()
             except Exception:  # noqa: BLE001
                 log.debug("tray tick failed", exc_info=True)
             self._stop.wait(2.0)

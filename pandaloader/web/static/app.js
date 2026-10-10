@@ -48,9 +48,11 @@ async function act(path, body = {}, okMsg) {
 }
 
 // ---------- rendering ----------
+let lastPollMs = Date.now();
 async function refresh() {
   try {
     state = await api("/api/state");
+    lastPollMs = Date.now();
     render();
   } catch (e) {
     $("summary").textContent = "connection lost";
@@ -72,6 +74,14 @@ function render() {
   $("btnRender").title = q.pending === 0 && q.toDenoise > 0 ? `Nothing to render; ${q.toDenoise} finished scene(s) wait for denoising` : "Start rendering pending scenes";
   $("shutdownAfter").checked = !!s.shutdownAfterQueue;
   $("counts").textContent = q.total ? `${q.pending} pending · ${q.running} running · ${q.done} done · ${q.failed} failed` + (q.toDenoise ? ` · ${q.toDenoise} to denoise` : "") + (q.averageSecs ? ` · avg ${hms(q.averageSecs)}` : "") : "";
+
+  // pending PC shutdown
+  const banner = $("shutdownBanner");
+  if (s.shutdownAt) {
+    banner.hidden = false;
+    $("shutdownCountdown").textContent = Math.max(0, Math.round(s.shutdownAt - s.now));
+    document.title = "⚠ SHUTDOWN · PandaLoader";
+  } else if (!banner.hidden) { banner.hidden = true; document.title = "PandaLoader"; }
 
   // workers
   $("workers").innerHTML = s.workers.map(workerCard).join("");
@@ -310,6 +320,10 @@ $("btnRender").onclick = () => act("/api/run/start", {}, "rendering");
 $("btnPause").onclick = () => act("/api/run/pause");
 $("btnResume").onclick = () => act("/api/run/resume");
 $("btnStop").onclick = () => { if (confirm("Kill the running renders? Their scenes go back to pending.")) act("/api/run/stop"); };
+$("btnAbortShutdown").onclick = () => act("/api/shutdown/abort", {}, "shutdown aborted");
+setInterval(() => {  // tick the countdown every second between polls
+  if (state && state.shutdownAt) { const left = Math.round(state.shutdownAt - (state.now + (Date.now() - lastPollMs) / 1000)); $("shutdownCountdown").textContent = Math.max(0, left); }
+}, 1000);
 $("shutdownAfter").onchange = (e) => act("/api/settings", { shutdownAfterQueue: e.target.checked });
 $("btnResetFailed").onclick = () => act("/api/scenes/reset", { failedOnly: true });
 $("btnResetAll").onclick = () => { if (confirm("Reset every scene to pending?")) act("/api/scenes/reset", { failedOnly: false }); };

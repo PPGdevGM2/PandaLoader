@@ -143,6 +143,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 m.resume()
             elif route == "run/stop":
                 m.stop()
+            elif route == "shutdown/abort":
+                m.abort_shutdown()
             elif route == "scenes/add":
                 n = m.add_scenes(body.get("files", []), body.get("targetDir"), body.get("postLoaders"),
                                  body.get("atTop", False), bool(body.get("denoise", False)))

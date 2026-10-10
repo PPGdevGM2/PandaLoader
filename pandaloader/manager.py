@@ -43,6 +43,7 @@ class Manager:
         self.recent: List[str] = []
         self._mtime_cache: dict = {}
         self.on_port_change: Optional[Callable[[int], None]] = None  # set by the host (tray/serve) to rebind
+        self.shutdown_at: Optional[float] = None  # epoch seconds of a pending PC shutdown
         self._load_state()
         for slot in cfg.run_slots():
             self.status.add_worker(slot.name, slot.gpu)
@@ -202,10 +203,32 @@ class Manager:
                     subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, check=False, timeout=3)
         self.status.log("stopped for Windows shutdown", level="warning")
 
+    SHUTDOWN_DELAY_S = 60
+
     def _on_finished(self) -> None:
         if self.cfg.shutdown_after_queue:
-            self.status.log("queue finished: shutting down the PC in 60 s (shutdown /a aborts)", level="warning")
-            subprocess.run(["shutdown", "/s", "/t", "60", "/c", "PandaLoader: render queue finished"], check=False)
+            self.status.log(f"queue finished: shutting down the PC in {self.SHUTDOWN_DELAY_S} s (abort on the page or in the tray)", level="warning")
+            r = subprocess.run(["shutdown", "/s", "/t", str(self.SHUTDOWN_DELAY_S), "/c", "PandaLoader: render queue finished"],
+                               capture_output=True, text=True, check=False)
+            if r.returncode == 0:
+                self.shutdown_at = time.time() + self.SHUTDOWN_DELAY_S
+            else:
+                self.status.log(f"shutdown command failed: {(r.stderr or r.stdout).strip()}", level="error")
+
+    def abort_shutdown(self) -> None:
+        """Cancel a pending shutdown (shutdown /a). Safe to call when none is pending."""
+        with self.lock:
+            r = subprocess.run(["shutdown", "/a"], capture_output=True, text=True, check=False)
+            was_pending = self.shutdown_at is not None
+            self.shutdown_at = None
+            if r.returncode == 0 or was_pending:
+                self.status.log("PC shutdown aborted", level="warning")
+            else:
+                raise ManagerError(f"no shutdown to abort ({(r.stderr or r.stdout).strip() or 'shutdown /a failed'})")
+
+    @property
+    def shutdown_pending(self) -> bool:
+        return self.shutdown_at is not None and time.time() < self.shutdown_at + 5
 
     # -- scene editing -------------------------------------------------------------
     def _scene(self, index: int) -> Scene:
@@ -565,6 +588,7 @@ class Manager:
         with self.lock:
             snap = self.status.snapshot()
             snap["running"] = self.running
+            snap["shutdownAt"] = self.shutdown_at if self.shutdown_pending else None
             q = self.queue
             scenes = []
             if q is not None:

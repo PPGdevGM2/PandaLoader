@@ -40,6 +40,22 @@ input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); bo
 .hint { color: var(--muted); font-size: 12px; font-weight: normal; }
 [hidden] { display: none !important; }
 
+/* pending PC shutdown: fixed over the top, never shifts the layout */
+.shutdown-banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center; gap: 24px;
+  padding: 14px 20px; background: #b3121b; color: #fff; border-bottom: 3px solid #ff5a5a;
+  box-shadow: 0 4px 18px rgba(0,0,0,.6); animation: shutdown-pulse 1s ease-in-out infinite alternate;
+}
+.shutdown-banner .msg { font-size: 22px; font-weight: 800; letter-spacing: 1px; }
+.shutdown-banner .msg b { font-size: 26px; }
+.shutdown-banner button {
+  font-size: 20px; font-weight: 800; padding: 10px 28px; background: #fff; color: #b3121b;
+  border: 3px solid #fff; border-radius: 8px; letter-spacing: 1px; cursor: pointer;
+}
+.shutdown-banner button:hover { background: #ffe3e3; }
+@keyframes shutdown-pulse { from { background: #b3121b; } to { background: #d81e28; } }
+
 /* header */
 .top {
   display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 24px;
