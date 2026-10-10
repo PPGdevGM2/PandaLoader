@@ -201,11 +201,21 @@ def _start_app(args):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:  # fail early, before touching the queue
             probe.bind((cfg.web_host, cfg.web_port))
     except OSError as e:
+        # A PandaLoader that is still unpacking/starting owns the port but does not answer yet
+        # (double-clicked twice on a slow first launch): give it a few seconds before blaming others.
+        for _ in range(16):
+            time.sleep(0.5)
+            existing = _running_instance(cfg.web_port)
+            if existing:
+                raise AlreadyRunning(existing)
         raise RuntimeError(f"Port {cfg.web_port} is in use by another program ({e.strerror or e}).\n"
                            f"Change the port with: PandaLoader.exe --port <number>")
+    first_run = not cfg_path.exists()
     manager = Manager(cfg, cfg_path)
-    if not cfg_path.exists():
+    manager.first_run = first_run
+    if first_run:
         manager.save_config()
+        manager.status.log("first start: default config written; see Settings > Setup for the checklist")
     if getattr(args, "queue", None):
         manager.open_queue(args.queue)
     server = WebServer(manager, cfg.web_host, cfg.web_port)
@@ -268,7 +278,7 @@ def cmd_tray(args) -> int:
         return 1
     app = TrayApp(manager, server, manager.cfg.web_host)
     _check_nvidia_smi(manager)
-    if args.open:
+    if args.open or manager.first_run:  # first start: show the page and its setup checklist
         server.open_browser()
     try:
         app.run()  # blocks on the main thread until Quit

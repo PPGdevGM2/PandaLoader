@@ -45,6 +45,7 @@ class Manager:
         self.on_port_change: Optional[Callable[[int], None]] = None  # set by the host (tray/serve) to rebind
         self.shutdown_at: Optional[float] = None  # epoch seconds of a pending PC shutdown
         self._denoiser_install: Optional[dict] = None  # {"phase", "fraction", "error", "done"} while/after installing
+        self.first_run = False  # set by the host when no config.json existed at start
         self._load_state()
         for slot in cfg.run_slots():
             self.status.add_worker(slot.name, slot.gpu)
@@ -627,6 +628,7 @@ class Manager:
         with self.lock:
             snap = self.status.snapshot()
             snap["running"] = self.running
+            snap["firstRun"] = self.first_run
             snap["shutdownAt"] = self.shutdown_at if self.shutdown_pending else None
             q = self.queue
             scenes = []

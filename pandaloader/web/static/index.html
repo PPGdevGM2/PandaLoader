@@ -193,6 +193,7 @@
         <button type="button" class="tab active" data-stab="general">General</button>
         <button type="button" class="tab" data-stab="denoiser">Denoiser</button>
         <button type="button" class="tab" data-stab="notes">Notifications</button>
+        <button type="button" class="tab" data-stab="setup">Setup</button>
       </div>
       <div class="stab" data-stab="general">
       <fieldset>
@@ -234,6 +235,19 @@
           <label class="check"><input type="checkbox" data-note="errors"> Tray action refused <span class="hint">e.g. Render with nothing pending</span></label>
         </div>
       </fieldset>
+      </div>
+      <div class="stab setup" data-stab="setup" hidden>
+        <p class="hint">First-run checklist for a fresh PC. Everything here is a one-time step.</p>
+        <ol>
+          <li><b>Windows SmartScreen.</b> The exe is not signed. On the first start click <i>More info</i> → <i>Run anyway</i>.</li>
+          <li><b>Firewall prompt.</b> Windows asks whether PandaLoader may accept connections. Allow it to reach this page from other PCs; cancelling keeps localhost working. Leave the exe where it is, the rule is tied to its path.</li>
+          <li><b>DAZ Studio 6, once by hand.</b> Start it normally, open <i>Render Settings → Advanced → Hardware (Photoreal Devices)</i>: untick <b>CPU</b> and tick <b>every GPU that should render</b>. Close DAZ. The headless workers inherit exactly this selection (<code>-copyAppSettings</code>); a ticked CPU slows every render, an unticked GPU is never used.</li>
+          <li><b>Workers.</b> The default is one worker on GPU 0. For each additional GPU ticked above add a worker in <i>General</i> pinned to that GPU, or switch to <i>One scene at a time</i> to let all enabled workers' GPUs render the same scene.</li>
+          <li><b>DAZ path.</b> <i>General → DAZ Studio executable</i> must point at DAZStudio.exe when DAZ is not in the default Program Files folder. The same content library mapping as on your working PC is needed, or scenes load with missing assets.</li>
+          <li><b>nvidia-smi.</b> Comes with the NVIDIA driver. Without it PandaLoader shows a warning at start and no GPU gauges; rendering still works.</li>
+          <li><b>Denoise (optional).</b> <i>Denoiser → Install…</i> downloads Denoiser OI into the work dir.</li>
+          <li><b>Go.</b> Open a queue (<code>.rq.json</code>) or create a new one, add scenes, press <i>Render</i>. The tray icon holds the quick actions and the port.</li>
+        </ol>
       </div>
       <div class="hint" id="sInfo"></div>
       <div class="row buttons"><span class="spacer"></span><button type="button" data-close>Cancel</button><button type="submit" class="primary">Save</button></div>

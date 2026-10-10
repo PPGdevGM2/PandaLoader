@@ -206,6 +206,9 @@ table.scenes td.dn input { vertical-align: middle; cursor: pointer; }
 .dlg-tabs .tab.active { color: var(--text); border-bottom: 2px solid var(--accent); border-radius: 0; }
 .stab { min-height: 300px; display: flow-root; }
 .stab p.hint { margin: 6px 0 10px; }
+.stab.setup ol { margin: 0; padding-left: 22px; font-size: 13px; line-height: 1.45; }
+.stab.setup li { margin: 0 0 8px; }
+.stab.setup code { background: #151517; padding: 0 4px; border-radius: 3px; }
 .log-tabs .tab { background: none; border: none; color: var(--muted); padding: 2px 6px; }
 .log-tabs .tab.active { color: var(--text); border-bottom: 2px solid var(--accent); border-radius: 0; }
 #logBody { background: #151517; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 6px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; }

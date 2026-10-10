@@ -107,7 +107,7 @@ def combined_slot(workers: list, name: str = "rqall") -> WorkerSlot:
 class Config:
     daz_exe: str = DEFAULT_DAZ_EXE
     daz_args: list = field(default_factory=lambda: list(DEFAULT_DAZ_ARGS))
-    workers: list = field(default_factory=lambda: [WorkerSlot("rqgpu0", 0), WorkerSlot("rqgpu1", 1)])
+    workers: list = field(default_factory=lambda: [WorkerSlot("rqgpu0", 0)])  # one GPU assumed; add more in Settings
     mode: str = MODE_PARALLEL          # parallel: one scene per worker; combined: one scene at a time
     combined_name: str = "rqall"       # instance name used in combined mode
     # Where a named instance writes its log.txt. {instance} is substituted.

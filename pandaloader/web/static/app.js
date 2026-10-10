@@ -62,6 +62,7 @@ async function refresh() {
 function render() {
   const s = state, q = s.queue;
   if (!$("settingsDlg").hidden) renderDenoiserState();
+  maybeShowSetup();
   // header
   $("queueName").textContent = q.path ? base(q.path).replace(/\.rq\.json$/, "") : "no queue open";
   $("queuePath").textContent = q.path || "";
@@ -523,6 +524,8 @@ $("addForm").onsubmit = async (e) => {
 function workerRowHtml(w, gpus) {
   const opts = [`<option value="all" ${w.gpu == null ? "selected" : ""}>all GPUs</option>`]
     .concat(gpus.map((g) => `<option value="${g.index}" ${w.gpu === g.index ? "selected" : ""}>GPU ${g.index}: ${esc(g.name)}</option>`));
+  if (w.gpu != null && !gpus.some((g) => String(g.index) === String(w.gpu)))  // pinned, but nvidia-smi lists no such GPU: keep the pin
+    opts.push(`<option value="${esc(w.gpu)}" selected>GPU ${esc(w.gpu)} (not detected)</option>`);
   const on = w.enabled !== false;
   return `<div class="worker-row"><label class="wtoggle" title="Enabled: takes part in runs"><input type="checkbox" class="wenabled" ${on ? "checked" : ""}></label><input type="text" class="wname" value="${esc(w.name)}" placeholder="instance name"><select class="wgpu">${opts.join("")}</select><button type="button" class="wdel" title="Remove">✕</button></div>`;
 }
@@ -564,11 +567,18 @@ function renderDenoiserState() {
   el.textContent = c.denoiserExe ? (c.denoiserValid ? "✓ found" : "✗ not found: denoise flags are skipped") : "not set: denoise flags are skipped";
   el.className = "hint " + (c.denoiserExe && !c.denoiserValid ? "err" : "");
 }
-$("sTabs").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-stab]"); if (!b) return;
-  document.querySelectorAll("#sTabs .tab").forEach((t) => t.classList.toggle("active", t === b));
-  document.querySelectorAll("#settingsForm .stab").forEach((d) => (d.hidden = d.dataset.stab !== b.dataset.stab));
-});
+function showSettingsTab(name) {
+  document.querySelectorAll("#sTabs .tab").forEach((t) => t.classList.toggle("active", t.dataset.stab === name));
+  document.querySelectorAll("#settingsForm .stab").forEach((d) => (d.hidden = d.dataset.stab !== name));
+}
+$("sTabs").addEventListener("click", (e) => { const b = e.target.closest("[data-stab]"); if (b) showSettingsTab(b.dataset.stab); });
+let firstRunShown = false;
+function maybeShowSetup() {
+  if (!state.firstRun || firstRunShown) return;
+  firstRunShown = true;
+  try { if (sessionStorage.getItem("setupShown")) return; sessionStorage.setItem("setupShown", "1"); } catch (e) {}
+  $("btnSettings").click(); showSettingsTab("setup");
+}
 $("sDenoiserInstall").onclick = async () => {
   const c = state.config;
   if (!confirm(`Download the latest Denoiser OI release (~50 MB) from GitHub into\n${c.workDir}/denoiser\nand use it as the denoiser?`)) return;
