@@ -90,6 +90,7 @@
     </table>
     <div class="empty" id="emptyHint" hidden>No scenes. Use <b>Add scenes…</b> to pick .duf files.</div>
   </div>
+  <div class="resizer" id="tableResize" title="Drag to change the list height · double-click to reset"><i></i></div>
   </div>
 
   <aside class="details" id="details" hidden>
@@ -188,6 +189,12 @@
   <div class="dialog">
     <div class="dialog-head"><h2>Settings</h2><button class="icon" data-close>✕</button></div>
     <form id="settingsForm" class="form">
+      <div class="dlg-tabs" id="sTabs">
+        <button type="button" class="tab active" data-stab="general">General</button>
+        <button type="button" class="tab" data-stab="denoiser">Denoiser</button>
+        <button type="button" class="tab" data-stab="notes">Notifications</button>
+      </div>
+      <div class="stab" data-stab="general">
       <fieldset>
         <legend>Workers <span class="hint">one DAZ instance each; pin to a CUDA device or use all</span></legend>
         <div id="sWorkers"></div>
@@ -207,11 +214,17 @@
         <label>DAZ Studio executable<input id="sDaz" type="text" class="mono"></label>
         <label>Web UI port <span class="hint">the page reloads on the new port</span><input id="sPort" type="number" min="1024" max="65535"></label>
       </div>
-      <label>Denoiser OI executable <span class="hint">Denoiser.exe; scenes with the denoise flag are pushed through it after rendering</span>
-        <span class="row"><input id="sDenoiser" type="text" class="mono grow" placeholder="I:/Denoiser OI_v1.6/Denoiser_v1.6/Denoiser.exe"><button type="button" id="sDenoiserBrowse">Browse…</button></span>
+      </div>
+      <div class="stab" data-stab="denoiser" hidden>
+      <p class="hint">Scenes with the denoise flag are pushed through <a href="https://github.com/DeclanRussell/IntelOIDenoiser" target="_blank" rel="noopener" title="Declan Russell's Intel Open Image Denoise command line tool">Denoiser OI ↗</a> (Intel Open Image Denoise) after rendering.
+        Point this at Denoiser.exe, or let PandaLoader download the latest prebuilt release into its work dir.</p>
+      <label>Denoiser OI executable
+        <span class="row"><input id="sDenoiser" type="text" class="mono grow" placeholder="I:/Denoiser OI_v1.6/Denoiser_v1.6/Denoiser.exe"><button type="button" id="sDenoiserBrowse">Browse…</button><button type="button" id="sDenoiserInstall" title="Download the latest prebuilt release (~50 MB) from GitHub into the work dir and use it">Install…</button></span>
         <span class="hint" id="sDenoiserState"></span>
       </label>
       <label class="check"><input type="checkbox" id="sKeepOriginal"> Keep the original render <span class="hint">write the result as &lt;name&gt;_denoised.png beside it instead of replacing it</span></label>
+      </div>
+      <div class="stab" data-stab="notes" hidden>
       <fieldset>
         <legend>Desktop notifications <span class="hint">balloons from the tray icon</span></legend>
         <div class="grid2">
@@ -221,6 +234,7 @@
           <label class="check"><input type="checkbox" data-note="errors"> Tray action refused <span class="hint">e.g. Render with nothing pending</span></label>
         </div>
       </fieldset>
+      </div>
       <div class="hint" id="sInfo"></div>
       <div class="row buttons"><span class="spacer"></span><button type="button" data-close>Cancel</button><button type="submit" class="primary">Save</button></div>
     </form>

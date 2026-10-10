@@ -44,6 +44,7 @@ class Manager:
         self._mtime_cache: dict = {}
         self.on_port_change: Optional[Callable[[int], None]] = None  # set by the host (tray/serve) to rebind
         self.shutdown_at: Optional[float] = None  # epoch seconds of a pending PC shutdown
+        self._denoiser_install: Optional[dict] = None  # {"phase", "fraction", "error", "done"} while/after installing
         self._load_state()
         for slot in cfg.run_slots():
             self.status.add_worker(slot.name, slot.gpu)
@@ -411,6 +412,44 @@ class Manager:
                     sc.data["singleCamName"] = 0
             self._commit(f"edited {sc.name}")
 
+    # -- denoiser install ------------------------------------------------------
+    def install_denoiser(self) -> None:
+        """Download the latest prebuilt Denoiser OI release into <work dir>/denoiser in the
+        background and point the denoiser setting at the unpacked exe. Progress is in snapshot()."""
+        from .denoise import REPO_URL, install_denoiser
+        with self.lock:
+            st = self._denoiser_install
+            if st is not None and not st.get("done"):
+                raise ManagerError("a denoiser install is already running")
+            self._denoiser_install = {"phase": "starting", "fraction": 0.0, "error": None, "done": False, "exe": None}
+            self.status.log(f"denoiser: installing the latest release from {REPO_URL} into {Path(self.cfg.work_dir) / 'denoiser'}")
+
+        def progress(phase: str, frac: float) -> None:
+            with self.lock:
+                if self._denoiser_install is not None:
+                    self._denoiser_install.update(phase=phase, fraction=frac)
+
+        def run() -> None:
+            try:
+                exe = install_denoiser(self.cfg.work_dir, progress)
+            except Exception as e:  # noqa: BLE001
+                log.exception("denoiser install failed")
+                with self.lock:
+                    self._denoiser_install.update(phase="failed", error=f"{type(e).__name__}: {e}", done=True)
+                    self.status.log(f"denoiser: install failed: {e}", level="error")
+                return
+            with self.lock:
+                self.cfg.denoiser_exe = exe
+                self._denoiser_install.update(phase="installed", fraction=1.0, done=True, exe=exe)
+                self.status.log(f"denoiser: installed and set to {exe}")
+                try:
+                    self.save_config()
+                except OSError:
+                    log.exception("could not save config after denoiser install")
+                self._publish()
+
+        threading.Thread(target=run, name="denoiser-install", daemon=True).start()
+
     # -- settings ------------------------------------------------------------------
     def update_settings(self, workers: Optional[List[dict]] = None, shutdown_after_queue: Optional[bool] = None,
                         job_timeout_s: Optional[float] = None, stall_timeout_s: Optional[float] = None,
@@ -613,6 +652,7 @@ class Manager:
                 "webPort": self.cfg.web_port, "mode": self.cfg.mode, "notifications": dict(self.cfg.notifications),
                 "denoiserExe": self.cfg.denoiser_exe, "denoiserValid": _denoiser_valid(self.cfg.denoiser_exe),
                 "denoiseKeepOriginal": self.cfg.denoise_keep_original,
+                "denoiserInstall": dict(self._denoiser_install) if self._denoiser_install else None,
                 "runSlots": [w.to_dict() for w in self.cfg.run_slots()],
             }
             snap["gpus"] = _gpus()

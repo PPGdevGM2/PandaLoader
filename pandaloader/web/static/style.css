@@ -38,6 +38,8 @@ input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); bo
 .spacer { flex: 1; }
 .grow { flex: 1; }
 .hint { color: var(--muted); font-size: 12px; font-weight: normal; }
+.hint a { color: var(--accent); text-decoration: none; }
+.hint a:hover { text-decoration: underline; }
 [hidden] { display: none !important; }
 
 /* pending PC shutdown: fixed over the top, never shifts the layout */
@@ -141,6 +143,10 @@ table.scenes tbody tr.drop-before td { box-shadow: inset 0 2px 0 0 var(--accent)
 table.scenes tbody tr.drop-after td { box-shadow: inset 0 -2px 0 0 var(--accent); }
 .table-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .table-col .table-wrap { flex: 1; }
+.table-col.sized .table-wrap { flex: none; max-height: none; }
+.resizer { height: 10px; margin: -6px 0 -4px; cursor: ns-resize; display: flex; align-items: center; justify-content: center; touch-action: none; }
+.resizer i { display: block; width: 48px; height: 4px; border-radius: 2px; background: var(--line); transition: background .15s; }
+.resizer:hover i, .resizer.active i { background: var(--accent); }
 .batchbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #2e2a33; border: 1px solid #4a3d4f; border-radius: 6px; height: 42px; transition: background .2s, border-color .2s; flex-wrap: nowrap; white-space: nowrap; overflow: hidden; }
 .batchbar #batchCount { cursor: help; }
 .batchbar #batchCount { font-weight: 600; color: var(--accent); margin-right: 6px; min-width: 90px; }
@@ -194,6 +200,12 @@ table.scenes td.dn input { vertical-align: middle; cursor: pointer; }
 /* log */
 .log { padding: 8px 16px 12px; }
 .log-head { display: flex; align-items: center; gap: 16px; }
+.dlg-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.dlg-tabs .tab { background: none; border: none; color: var(--muted); padding: 6px 10px; margin-bottom: -1px; }
+.dlg-tabs .tab:hover { color: var(--text); }
+.dlg-tabs .tab.active { color: var(--text); border-bottom: 2px solid var(--accent); border-radius: 0; }
+.stab { min-height: 300px; display: flow-root; }
+.stab p.hint { margin: 6px 0 10px; }
 .log-tabs .tab { background: none; border: none; color: var(--muted); padding: 2px 6px; }
 .log-tabs .tab.active { color: var(--text); border-bottom: 2px solid var(--accent); border-radius: 0; }
 #logBody { background: #151517; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 6px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; }

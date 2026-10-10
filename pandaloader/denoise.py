@@ -93,3 +93,76 @@ def _cleanup(p: Path) -> None:
             p.unlink()
     except OSError:
         pass
+
+
+# -- installing the tool ------------------------------------------------------------
+REPO_URL = "https://github.com/DeclanRussell/IntelOIDenoiser"
+RELEASES_API = "https://api.github.com/repos/DeclanRussell/IntelOIDenoiser/releases/latest"
+INSTALL_SUBDIR = "denoiser"
+
+
+def latest_release() -> Tuple[str, str, int]:
+    """(tag, zip url, size) of the newest prebuilt Windows release on GitHub."""
+    import json
+    import urllib.request
+    req = urllib.request.Request(RELEASES_API, headers={"User-Agent": "PandaLoader", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        rel = json.load(r)
+    for a in rel.get("assets", []):
+        if a.get("name", "").lower().endswith(".zip"):
+            return rel.get("tag_name", "?"), a["browser_download_url"], int(a.get("size") or 0)
+    raise RuntimeError("the latest release has no .zip asset")
+
+
+def install_denoiser(work_dir: str, progress=None) -> str:
+    """Download the latest prebuilt release zip into <work_dir>/denoiser and unpack it.
+    The repo itself holds only source (CMake + Conan), so the exe comes from the
+    Releases tab. ``progress(phase, fraction)`` is called while downloading.
+    Returns the path of the unpacked Denoiser.exe."""
+    import shutil
+    import urllib.request
+    import zipfile
+
+    def report(phase: str, frac: float) -> None:
+        if progress is not None:
+            progress(phase, frac)
+
+    report("looking up the latest release", 0.0)
+    tag, url, size = latest_release()
+    dest = Path(work_dir) / INSTALL_SUBDIR
+    dest.mkdir(parents=True, exist_ok=True)
+    zpath = dest / f"Denoiser_{tag}.zip"
+    req = urllib.request.Request(url, headers={"User-Agent": "PandaLoader"})
+    with urllib.request.urlopen(req, timeout=60) as r, open(zpath, "wb") as f:
+        total = int(r.headers.get("Content-Length") or size or 0)
+        got = 0
+        while True:
+            chunk = r.read(1 << 18)
+            if not chunk:
+                break
+            f.write(chunk)
+            got += len(chunk)
+            report(f"downloading release {tag} ({got / 1e6:.0f} of {total / 1e6:.0f} MB)" if total else f"downloading release {tag} ({got / 1e6:.0f} MB)",
+                   got / total if total else 0.0)
+    if not zipfile.is_zipfile(zpath):
+        zpath.unlink(missing_ok=True)
+        raise RuntimeError("the download is not a zip file")
+    report("unpacking", 1.0)
+    with zipfile.ZipFile(zpath) as z:
+        names = z.namelist()
+        if any(n.startswith("/") or ".." in Path(n).parts for n in names):
+            raise RuntimeError("zip contains unsafe paths")
+        exe_members = [n for n in names if Path(n).name.lower() == "denoiser.exe"]
+        if not exe_members:
+            raise RuntimeError("zip contains no Denoiser.exe")
+        # The zip holds LICENSE, README and a Denoiser_vX.Y folder; unpack it straight into
+        # <work dir>/denoiser, replacing whatever an earlier install left there.
+        for child in dest.iterdir():
+            if child != zpath:
+                shutil.rmtree(child, ignore_errors=True) if child.is_dir() else child.unlink(missing_ok=True)
+        z.extractall(dest)
+    zpath.unlink(missing_ok=True)
+    exe = next(dest.rglob("Denoiser.exe"), None)
+    if exe is None or not exe.is_file():
+        raise RuntimeError("Denoiser.exe missing after unpacking")
+    return exe.as_posix()

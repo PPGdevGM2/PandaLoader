@@ -61,6 +61,7 @@ async function refresh() {
 
 function render() {
   const s = state, q = s.queue;
+  if (!$("settingsDlg").hidden) renderDenoiserState();
   // header
   $("queueName").textContent = q.path ? base(q.path).replace(/\.rq\.json$/, "") : "no queue open";
   $("queuePath").textContent = q.path || "";
@@ -101,6 +102,36 @@ function render() {
 }
 
 // ---------- GPU gauges ----------
+// ---------- resizable scene list ----------
+const TABLE_H_KEY = "tableHeight";
+function applyTableHeight(h) {
+  const col = document.querySelector(".table-col"), wrap = document.querySelector(".table-wrap"), det = $("details");
+  col.classList.toggle("sized", !!h);
+  wrap.style.height = h ? `${h}px` : "";
+  det.style.maxHeight = h ? `${h + 50}px` : "";   // batch bar + gap above the table: bottoms stay aligned
+}
+(function initTableResize() {
+  let saved = null;
+  try { saved = Number(localStorage.getItem(TABLE_H_KEY)) || null; } catch (e) {}
+  applyTableHeight(saved);
+  const grip = $("tableResize"), wrap = document.querySelector(".table-wrap");
+  let h = saved;
+  grip.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); grip.classList.add("active");
+    try { grip.setPointerCapture(e.pointerId); } catch (e2) {}
+    const y0 = e.clientY, h0 = wrap.getBoundingClientRect().height;
+    const move = (ev) => { h = Math.max(100, Math.round(h0 + ev.clientY - y0)); applyTableHeight(h); };
+    const up = () => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up);
+      grip.classList.remove("active");
+      try { localStorage.setItem(TABLE_H_KEY, String(h)); } catch (e2) {}
+    };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
+  });
+  grip.addEventListener("dblclick", () => { h = null; applyTableHeight(null); try { localStorage.removeItem(TABLE_H_KEY); } catch (e) {} });
+})();
+
 function gaugesHidden(name) { try { return localStorage.getItem("gauges:" + name) === "hidden"; } catch (e) { return false; } }
 function setGaugesHidden(name, hidden) { try { localStorage.setItem("gauges:" + name, hidden ? "hidden" : "shown"); } catch (e) {} }
 function donut(frac, label, value, cls) {
@@ -503,10 +534,46 @@ $("btnSettings").onclick = () => {
   $("sTimeout").value = c.jobTimeoutS; $("sStall").value = c.stallTimeoutS; $("sAttempts").value = c.maxAttempts;
   $("sSize").value = c.imageSize ? c.imageSize.join("x") : ""; $("sDaz").value = c.dazExe; $("sPort").value = c.webPort;
   $("sDenoiser").value = c.denoiserExe || ""; $("sKeepOriginal").checked = !!c.denoiseKeepOriginal;
-  $("sDenoiserState").textContent = c.denoiserExe ? (c.denoiserValid ? "✓ found" : "✗ not found: denoise flags are skipped") : "not set: denoise flags are skipped";
-  $("sDenoiserState").className = "hint " + (c.denoiserExe && !c.denoiserValid ? "err" : "");
+  lastInstalledExe = (c.denoiserInstall || {}).exe || null;  // an install that finished earlier is already in the field
+  renderDenoiserState();
   $("sInfo").textContent = `Work dir: ${c.workDir}` + (state.running ? " · workers can be changed when not rendering" : "");
   $("settingsDlg").hidden = false;
+  equalizeSettingsTabs();
+};
+// All tab panels get the height of the tallest one, so switching tabs never resizes the dialog.
+function equalizeSettingsTabs() {
+  const panels = [...document.querySelectorAll("#settingsForm .stab")];
+  const active = panels.find((d) => !d.hidden);
+  panels.forEach((d) => { d.hidden = false; d.style.minHeight = ""; });
+  const max = Math.max(...panels.map((d) => d.offsetHeight));
+  panels.forEach((d) => { d.style.minHeight = `${max}px`; d.hidden = d !== active; });
+}
+let lastInstalledExe = null;
+function renderDenoiserState() {
+  const c = state.config, st = c.denoiserInstall, el = $("sDenoiserState"), btn = $("sDenoiserInstall");
+  if (st && !st.done) {
+    el.textContent = `⬇ ${st.phase}${st.fraction > 0 && st.fraction < 1 ? ` · ${Math.round(st.fraction * 100)}%` : ""}`;
+    el.className = "hint"; btn.disabled = true; btn.textContent = "Installing…";
+    return;
+  }
+  btn.disabled = false; btn.textContent = c.denoiserValid ? "Reinstall…" : "Install…";
+  if (st && st.exe && st.exe !== lastInstalledExe) { lastInstalledExe = st.exe; $("sDenoiser").value = st.exe; }
+  if (st && st.error) { el.textContent = `✗ install failed: ${st.error}`; el.className = "hint err"; return; }
+  const field = $("sDenoiser").value.trim();
+  if (st && st.exe && field === st.exe) { el.textContent = `✓ installed ${st.exe}`; el.className = "hint"; return; }
+  el.textContent = c.denoiserExe ? (c.denoiserValid ? "✓ found" : "✗ not found: denoise flags are skipped") : "not set: denoise flags are skipped";
+  el.className = "hint " + (c.denoiserExe && !c.denoiserValid ? "err" : "");
+}
+$("sTabs").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-stab]"); if (!b) return;
+  document.querySelectorAll("#sTabs .tab").forEach((t) => t.classList.toggle("active", t === b));
+  document.querySelectorAll("#settingsForm .stab").forEach((d) => (d.hidden = d.dataset.stab !== b.dataset.stab));
+});
+$("sDenoiserInstall").onclick = async () => {
+  const c = state.config;
+  if (!confirm(`Download the latest Denoiser OI release (~50 MB) from GitHub into\n${c.workDir}/denoiser\nand use it as the denoiser?`)) return;
+  const d = await act("/api/denoiser/install", {}, "downloading the denoiser…");
+  if (d) renderDenoiserState();
 };
 $("sDenoiserBrowse").onclick = async () => {
   const f = await browser.open({ title: "Pick Denoiser.exe", kind: "exe", start: dirname($("sDenoiser").value) || null });
@@ -515,8 +582,9 @@ $("sDenoiserBrowse").onclick = async () => {
 $("sAddWorker").onclick = () => {
   const n = $("sWorkers").children.length;
   $("sWorkers").insertAdjacentHTML("beforeend", workerRowHtml({ name: `rqgpu${n}`, gpu: state.gpus[n] ? n : null }, state.gpus));
+  equalizeSettingsTabs();
 };
-$("sWorkers").addEventListener("click", (e) => { if (e.target.classList.contains("wdel")) e.target.closest(".worker-row").remove(); });
+$("sWorkers").addEventListener("click", (e) => { if (e.target.classList.contains("wdel")) { e.target.closest(".worker-row").remove(); equalizeSettingsTabs(); } });
 $("settingsForm").onsubmit = async (e) => {
   e.preventDefault();
   const workers = [...$("sWorkers").querySelectorAll(".worker-row")].map((r) => ({ name: r.querySelector(".wname").value.trim(), gpu: r.querySelector(".wgpu").value, enabled: r.querySelector(".wenabled").checked }));
