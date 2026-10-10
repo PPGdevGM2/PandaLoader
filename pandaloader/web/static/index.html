@@ -50,11 +50,25 @@
   <span class="counts" id="counts"></span>
 </section>
 
+
+
 <main class="main">
+  <div class="table-col">
+  <div class="batchbar inactive" id="batchbar">
+  <span id="batchCount" title="click = select · Ctrl+click = add · Shift+click = range · Ctrl+A = all · Esc = clear"></span>
+  <button data-batch="denoise" data-on="1">Denoise on</button>
+  <button data-batch="denoise" data-on="0">Denoise off</button>
+  <button data-batch="reset">Reset to pending</button>
+  <button data-batch="done">Mark done</button>
+  <button data-batch="remove" class="danger">Remove</button>
+  <span class="spacer"></span>
+  <button id="batchClear">Clear selection</button>
+</div>
   <div class="table-wrap">
     <table class="scenes" id="scenes">
       <thead>
         <tr>
+          <th class="sel"><input type="checkbox" id="selAll" title="Select all / none"></th>
           <th class="num">#</th>
           <th class="state">State</th>
           <th>Scene</th>
@@ -70,6 +84,7 @@
       <tbody></tbody>
     </table>
     <div class="empty" id="emptyHint" hidden>No scenes. Use <b>Add scenes…</b> to pick .duf files.</div>
+  </div>
   </div>
 
   <aside class="details" id="details" hidden>

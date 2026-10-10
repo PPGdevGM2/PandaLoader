@@ -3,7 +3,9 @@
 
 const $ = (id) => document.getElementById(id);
 let state = null;
-let selected = null;          // selected scene index
+let selected = null;          // scene shown in the details panel (last clicked)
+let selection = new Set();    // multi-selection for batch actions
+let anchor = null;            // row index for shift-click ranges
 let logTab = "events";
 let pollTimer = null;
 
@@ -73,13 +75,15 @@ function render() {
   // workers
   $("workers").innerHTML = s.workers.map(workerCard).join("");
 
-  // table
+  // table (left alone while a row is being dragged, or the drag would be cut off)
   const find = $("find").value.trim().toLowerCase();
   const tb = $("scenes").querySelector("tbody");
-  tb.innerHTML = s.scenes.map((sc) => sceneRow(sc, find)).join("");
+  if (!drag.active) tb.innerHTML = s.scenes.map((sc) => sceneRow(sc, find)).join("");
   $("emptyHint").hidden = s.scenes.length > 0;
   if (selected != null && !s.scenes[selected]) { selected = null; $("details").hidden = true; }
   if (selected != null) renderDetails(s.scenes[selected], false);
+  selection = new Set([...selection].filter((i) => i < s.scenes.length));
+  renderBatchBar();
 
   // log
   renderLog();
@@ -154,7 +158,8 @@ $("workers").addEventListener("click", (ev) => {
 
 function sceneRow(sc, find) {
   const found = find && (sc.name.toLowerCase().includes(find) || (sc.camera || "").toLowerCase().includes(find));
-  const cls = [sc.index === selected ? "selected" : "", found ? "found" : ""].join(" ");
+  const inSel = selection.has(sc.index);
+  const cls = [sc.index === selected ? "selected" : "", inSel ? "multi" : "", found ? "found" : ""].join(" ");
   const stateTxt = sc.stateName === "running" && sc.worker ? `${sc.worker}` : sc.stateName;
   const cam = sc.savedCamera ? (sc.camera ? `${esc(sc.camera)} <span class="hint">(saved)</span>` : `<span class="hint">saved with scene</span>`) : `<b>${esc(sc.camera)}</b>`;
   const assets = sc.postLoaders.length ? `${sc.postLoaders.length} PRA` : "";
@@ -162,7 +167,8 @@ function sceneRow(sc, find) {
   const err = sc.lastError ? ` title="${esc(sc.lastError)}"` : "";
   const dnMark = sc.denoised === true ? `<span class="dnok" title="denoised">✓</span>` : sc.denoised === false ? `<span class="dnfail" title="denoise failed, see queue log">!</span>` : "";
   const dn = `<input type="checkbox" class="dnbox" data-act="denoise" ${sc.denoise ? "checked" : ""} title="Post-render denoise${state.config.denoiserValid ? "" : " (no valid denoiser path in Settings: flag is skipped)"}">${dnMark}`;
-  return `<tr class="${cls}" data-i="${sc.index}"${err}>
+  return `<tr class="${cls}" data-i="${sc.index}"${err} draggable="true">
+    <td class="sel"><input type="checkbox" class="selbox" ${inSel ? "checked" : ""}></td>
     <td class="num">${sc.index + 1}</td>
     <td class="state"><span class="badge ${sc.stateName}">${esc(stateTxt)}</span></td>
     <td>${esc(sc.name)}.duf</td>
@@ -315,6 +321,13 @@ $("scenes").addEventListener("click", async (ev) => {
     act(`/api/scene/${i}/denoise`, { on: ev.target.checked });
     return;
   }
+  if (ev.target.classList.contains("selbox")) {
+    ev.stopPropagation();
+    if (ev.shiftKey && anchor != null) selectRange(anchor, i, true);
+    else if (ev.target.checked) selection.add(i); else selection.delete(i);
+    anchor = i; render();
+    return;
+  }
   if (btn) {
     ev.stopPropagation();
     const a = btn.dataset.act;
@@ -323,7 +336,92 @@ $("scenes").addEventListener("click", async (ev) => {
     else act(`/api/scene/${i}/${a}`);
     return;
   }
-  selected = i; renderDetails(state.scenes[i], true); render();
+  if (ev.shiftKey && anchor != null) { selectRange(anchor, i, true); }
+  else if (ev.ctrlKey || ev.metaKey) { if (selection.has(i)) selection.delete(i); else selection.add(i); }
+  else if (selection.has(i)) {               // clicking a selected row again deselects it
+    selection.delete(i);
+    if (selected === i) { selected = null; $("details").hidden = true; }
+    anchor = i; render(); return;
+  }
+  else { selection = new Set([i]); }
+  anchor = i; selected = i; renderDetails(state.scenes[i], true); render();
+});
+
+// ---------- drag to reorder ----------
+const drag = { active: false, indices: [], over: null, after: false };
+const tbodyEl = $("scenes").querySelector("tbody");
+tbodyEl.addEventListener("dragstart", (ev) => {
+  const tr = ev.target.closest("tr[data-i]"); if (!tr) return;
+  const i = Number(tr.dataset.i);
+  drag.active = true;
+  drag.indices = selection.has(i) ? [...selection].sort((a, b) => a - b) : [i];
+  ev.dataTransfer.effectAllowed = "move";
+  try { ev.dataTransfer.setData("text/plain", String(i)); } catch (e) {}
+  tbodyEl.querySelectorAll("tr").forEach((r) => { if (drag.indices.includes(Number(r.dataset.i))) r.classList.add("dragging"); });
+});
+tbodyEl.addEventListener("dragover", (ev) => {
+  if (!drag.active) return;
+  const tr = ev.target.closest("tr[data-i]"); if (!tr) return;
+  ev.preventDefault(); ev.dataTransfer.dropEffect = "move";
+  const rect = tr.getBoundingClientRect();
+  const after = ev.clientY > rect.top + rect.height / 2;
+  if (drag.over !== tr || drag.after !== after) {
+    if (drag.over) drag.over.classList.remove("drop-before", "drop-after");
+    drag.over = tr; drag.after = after;
+    tr.classList.add(after ? "drop-after" : "drop-before");
+  }
+});
+tbodyEl.addEventListener("dragleave", (ev) => {
+  if (drag.over && !tbodyEl.contains(ev.relatedTarget)) { drag.over.classList.remove("drop-before", "drop-after"); drag.over = null; }
+});
+tbodyEl.addEventListener("drop", async (ev) => {
+  if (!drag.active) return;
+  ev.preventDefault();
+  const tr = ev.target.closest("tr[data-i]");
+  const to = tr ? Number(tr.dataset.i) + (drag.after ? 1 : 0) : state.scenes.length;
+  const indices = drag.indices;
+  endDrag();
+  if (indices.length === 1 && (to === indices[0] || to === indices[0] + 1)) return;  // dropped where it was
+  const d = await act("/api/scenes/reorder", { indices, to });
+  if (d && d.indices) { selection = new Set(d.indices); if (selected != null) selected = d.indices[0]; render(); }
+});
+tbodyEl.addEventListener("dragend", () => { endDrag(); render(); });
+function endDrag() {
+  drag.active = false;
+  tbodyEl.querySelectorAll("tr.dragging, tr.drop-before, tr.drop-after").forEach((r) => r.classList.remove("dragging", "drop-before", "drop-after"));
+  drag.over = null;
+}
+function selectRange(a, b, add) {
+  const [lo, hi] = a < b ? [a, b] : [b, a];
+  if (!add) selection = new Set();
+  for (let k = lo; k <= hi; k++) selection.add(k);
+}
+function renderBatchBar() {
+  const n = selection.size;
+  const bar = $("batchbar");
+  bar.classList.toggle("inactive", n === 0);   // always takes up its space; never shifts the table
+  bar.querySelectorAll("button").forEach((b) => (b.disabled = n === 0));
+  $("batchCount").textContent = n ? `${n} selected` : "no selection";
+  const all = $("selAll"); const total = state ? state.scenes.length : 0;
+  all.checked = total > 0 && n === total; all.indeterminate = n > 0 && n < total;
+}
+$("selAll").onchange = (e) => { selection = e.target.checked ? new Set(state.scenes.map((s) => s.index)) : new Set(); render(); };
+$("batchClear").onclick = () => { selection = new Set(); render(); };
+$("batchbar").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button[data-batch]"); if (!b) return;
+  const indices = [...selection]; if (!indices.length) return;
+  const action = b.dataset.batch;
+  if (action === "remove" && !confirm(`Remove ${indices.length} scene(s) from the queue?`)) return;
+  const d = await act("/api/scenes/batch", { indices, action, on: b.dataset.on !== "0" });
+  if (d) {
+    toast(`${d.done} scene(s) ${action === "denoise" ? "updated" : action === "remove" ? "removed" : action}${d.skipped ? `, ${d.skipped} rendering skipped` : ""}`, true);
+    if (action === "remove") { selection = new Set(); selected = null; $("details").hidden = true; }
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && selection.size && document.querySelectorAll(".modal:not([hidden])").length === 0) { selection = new Set(); render(); }
+  if (e.key === "a" && (e.ctrlKey || e.metaKey) && state && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)
+      && document.querySelectorAll(".modal:not([hidden])").length === 0) { e.preventDefault(); selection = new Set(state.scenes.map((s) => s.index)); render(); }
 });
 $("dClose").onclick = () => { selected = null; $("details").hidden = true; render(); };
 $("dForm").onsubmit = (e) => {

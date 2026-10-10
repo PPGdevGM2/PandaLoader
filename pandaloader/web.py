@@ -143,6 +143,10 @@ class ApiHandler(BaseHTTPRequestHandler):
                 n = m.add_scenes(body.get("files", []), body.get("targetDir"), body.get("postLoaders"),
                                  body.get("atTop", False), bool(body.get("denoise", False)))
                 return self._json({"added": n})
+            elif route == "scenes/reorder":
+                return self._json({"indices": m.reorder(body.get("indices", []), int(body.get("to", 0)))})
+            elif route == "scenes/batch":
+                return self._json(m.batch(body.get("indices", []), body.get("action", ""), bool(body.get("on", True))))
             elif route == "scenes/reset":
                 return self._json({"reset": m.reset_all(body.get("failedOnly", False))})
             elif len(parts) == 4 and parts[1] == "scene":

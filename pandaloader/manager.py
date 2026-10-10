@@ -283,6 +283,25 @@ class Manager:
                 self._commit()
             return new
 
+    def reorder(self, indices: List[int], to: int) -> List[int]:
+        """Move the given scenes (keeping their relative order) so that the first lands
+        at list position ``to`` (a position in the list before removal). Returns the
+        new indices of the moved scenes."""
+        with self.lock, self._qlock():
+            q = self._require_queue()
+            scenes = q.data["scenes"]
+            moving = sorted({int(i) for i in indices if 0 <= int(i) < len(scenes)})
+            if not moving:
+                return []
+            to = max(0, min(int(to), len(scenes)))
+            entries = [scenes[i] for i in moving]
+            insert_at = to - sum(1 for i in moving if i < to)
+            for i in reversed(moving):
+                del scenes[i]
+            scenes[insert_at:insert_at] = entries
+            self._commit()
+            return list(range(insert_at, insert_at + len(entries)))
+
     def reset_scene(self, index: int) -> None:
         with self.lock, self._qlock():
             sc = self._scene(index)
@@ -305,6 +324,37 @@ class Manager:
             n = self._require_queue().reset(failed_only=failed_only)
             self._commit(f"reset {n} scene(s)" + (" (failed only)" if failed_only else ""))
             return n
+
+    def batch(self, indices: List[int], action: str, on: bool = True) -> dict:
+        """Apply one action to several scenes: denoise, reset, done, remove.
+        Running scenes are skipped (except for the denoise flag). Returns counts."""
+        with self.lock, self._qlock():
+            q = self._require_queue()
+            idx = sorted({int(i) for i in indices if 0 <= int(i) < len(q.data["scenes"])}, reverse=True)
+            done = skipped = 0
+            for i in idx:
+                sc = q.scene(i)
+                if action == "denoise":
+                    sc.denoise = bool(on)
+                    done += 1
+                elif sc.state == STATE_RUNNING:
+                    skipped += 1
+                elif action == "reset":
+                    sc.mark_pending()
+                    sc.data.pop("lastError", None)
+                    done += 1
+                elif action == "done":
+                    sc.state = STATE_DONE
+                    done += 1
+                elif action == "remove":
+                    del q.data["scenes"][i]  # descending order keeps the other indices valid
+                    done += 1
+                else:
+                    raise ManagerError(f"unknown batch action {action!r}")
+            if done:
+                label = {"denoise": f"denoise {'on' if on else 'off'} for", "reset": "reset", "done": "marked done", "remove": "removed"}[action]
+                self._commit(f"{label} {done} scene(s)" if action != "denoise" else None)
+            return {"done": done, "skipped": skipped}
 
     def set_denoise(self, index: int, on: bool) -> None:
         """Quick toggle of the post-render denoise flag; allowed while rendering (read at finish)."""
