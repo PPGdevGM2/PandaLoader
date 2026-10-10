@@ -265,7 +265,7 @@ class Manager:
         with self.lock, self._qlock():
             q = self._require_queue()
             if post_loaders is None:
-                post_loaders = self._default_post_loaders()
+                post_loaders = []  # pre-render assets are per scene, never inherited from earlier entries
             tdir = Path(target_dir) if target_dir else self._default_target_dir()
             added = 0
             new_entries = []

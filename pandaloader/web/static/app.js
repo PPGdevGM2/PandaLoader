@@ -516,7 +516,7 @@ $("dLoadCams").onclick = async () => {
 $("btnAdd").onclick = () => {
   const sc = state.scenes[state.scenes.length - 1];
   $("aTargetDir").value = sc && sc.target ? dirname(sc.target) : "";
-  $("aAssets").value = sc ? sc.postLoaders.join("\n") : "";
+  $("aAssets").value = "";  // never inherited from earlier scenes
   $("aFiles").value = "";
   $("aAnimBox").hidden = true; $("aAnim").checked = false; $("aFrameRow").hidden = true; animInfoFor = null;
   $("aSizeOn").checked = false; $("aSizeRow").hidden = true; $("aWidth").value = ""; $("aHeight").value = "";

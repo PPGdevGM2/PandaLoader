@@ -119,7 +119,9 @@
           <button type="button" id="dLoadCams" title="Read the camera list from the scene file (a few seconds)">list</button>
         </span>
       </label>
-      <label class="check"><input type="checkbox" id="dDenoise"> Post-render denoise <span class="hint" id="dDenoiseHint"></span></label>
+      <div class="animbox">
+        <label class="check"><input type="checkbox" id="dDenoise"> Post-render denoise <span class="hint" id="dDenoiseHint"></span></label>
+      </div>
       <div class="animbox">
         <label class="check"><input type="checkbox" id="dAnim"> Render animation <span class="hint" id="dAnimHint"></span></label>
         <div class="row frames" id="dFrameRow" hidden>
@@ -183,15 +185,12 @@
     <div class="dialog-head"><h2>Add scenes</h2><button class="icon" data-close>✕</button></div>
     <form id="addForm" class="form">
       <label>Scene files
-        <span class="row"><textarea id="aFiles" rows="5" class="mono grow" placeholder="one .duf per line"></textarea>
+        <span class="row"><textarea id="aFiles" rows="5" class="mono grow" placeholder="one .duf per line&#10;add a single .duf for animation detection"></textarea>
         <button type="button" id="aBrowse">Browse…</button></span>
       </label>
-      <label>Target folder (PNG named after the scene)
-        <span class="row"><input id="aTargetDir" type="text" class="mono grow"><button type="button" id="aTargetBrowse">Browse…</button></span>
-      </label>
-      <label>Pre-render assets (one per line)
-        <span class="row"><textarea id="aAssets" rows="2" class="mono grow"></textarea><button type="button" id="aAssetBrowse">Browse…</button></span>
-      </label>
+      <div class="animbox">
+        <label class="check"><input type="checkbox" id="aDenoise"> Post-render denoise <span class="hint" id="aDenoiseHint"></span></label>
+      </div>
       <div class="animbox" id="aAnimBox" hidden>
         <label class="check"><input type="checkbox" id="aAnim"> Render animation <span class="hint" id="aAnimHint"></span></label>
         <div class="row frames" id="aFrameRow" hidden>
@@ -207,7 +206,12 @@
           <label>Height<input id="aHeight" type="number" min="1" step="1" placeholder="1080"></label>
         </div>
       </div>
-      <label class="check"><input type="checkbox" id="aDenoise"> Post-render denoise <span class="hint" id="aDenoiseHint"></span></label>
+      <label>Target folder (PNG named after the scene)
+        <span class="row"><input id="aTargetDir" type="text" class="mono grow"><button type="button" id="aTargetBrowse">Browse…</button></span>
+      </label>
+      <label>Pre-render assets (one per line)
+        <span class="row"><textarea id="aAssets" rows="2" class="mono grow"></textarea><button type="button" id="aAssetBrowse">Browse…</button></span>
+      </label>
       <label class="check"><input type="checkbox" id="aTop"> Insert at the top of the queue</label>
       <div class="row buttons"><span class="spacer"></span><button type="button" data-close>Cancel</button><button type="submit" class="primary">Add</button></div>
     </form>
