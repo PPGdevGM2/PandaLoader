@@ -76,6 +76,20 @@ class Scene:
     def name(self) -> str:
         return Path(self.file).stem
 
+    # -- render size override (plugin keys renderWidth/renderHeight; 0 = none) ------
+    @property
+    def image_size(self) -> Optional[tuple]:
+        w, h = int(self.data.get("renderWidth", 0) or 0), int(self.data.get("renderHeight", 0) or 0)
+        return (w, h) if w > 0 and h > 0 else None
+
+    def set_image_size(self, size) -> None:
+        """size: (w, h) to override the preset's render size for this scene, None/empty to clear."""
+        if size and int(size[0]) > 0 and int(size[1]) > 0:
+            self.data["renderWidth"], self.data["renderHeight"] = int(size[0]), int(size[1])
+        else:
+            self.data.pop("renderWidth", None)
+            self.data.pop("renderHeight", None)
+
     # -- animation (plugin keys anim/frameFirst/frameLast; framesDone is ours) -----
     @property
     def anim(self) -> bool:
@@ -237,6 +251,7 @@ class Scene:
             "denoise": self.denoise, "denoised": self.denoised,
             "anim": self.anim, "frameFirst": self.frame_first, "frameLast": self.frame_last,
             "framesTotal": len(self.frames), "framesDone": len(self.frames_done),
+            "imageSize": list(self.image_size) if self.image_size else None,
         }
 
 

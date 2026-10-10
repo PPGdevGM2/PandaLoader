@@ -154,7 +154,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 m.install_denoiser()
             elif route == "scenes/add":
                 n = m.add_scenes(body.get("files", []), body.get("targetDir"), body.get("postLoaders"),
-                                 body.get("atTop", False), bool(body.get("denoise", False)), body.get("anim"))
+                                 body.get("atTop", False), bool(body.get("denoise", False)), body.get("anim"),
+                                 body.get("imageSize"))
                 return self._json({"added": n})
             elif route == "scenes/reorder":
                 return self._json({"indices": m.reorder(body.get("indices", []), int(body.get("to", 0)))})
@@ -174,7 +175,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                     m.mark_done(i)
                 elif action == "edit":
                     m.edit_scene(i, body.get("target"), body.get("postLoaders"), body.get("camera"), body.get("denoise"),
-                                 body.get("anim"), body.get("frameFirst"), body.get("frameLast"))
+                                 body.get("anim"), body.get("frameFirst"), body.get("frameLast"),
+                                 body.get("imageSize", "keep"))
                 elif action == "denoise":
                     m.set_denoise(i, bool(body.get("on", True)))
                 else:

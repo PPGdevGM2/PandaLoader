@@ -211,7 +211,7 @@ function sceneRow(sc, find) {
   const cls = [sc.index === selected ? "selected" : "", inSel ? "multi" : "", found ? "found" : ""].join(" ");
   const stateTxt = sc.stateName === "running" && sc.worker ? `${sc.worker}` : sc.stateName;
   const cam = sc.savedCamera ? (sc.camera ? `${esc(sc.camera)} <span class="hint">(saved)</span>` : `<span class="hint">saved with scene</span>`) : `<b>${esc(sc.camera)}</b>`;
-  const assets = sc.postLoaders.length ? `${sc.postLoaders.length} PRA` : "";
+  const assets = [sc.postLoaders.length ? `${sc.postLoaders.length} PRA` : "", sc.imageSize ? `${sc.imageSize[0]}×${sc.imageSize[1]}` : ""].filter(Boolean).join(" · ");
   let last = sc.lastSecs ? hms(sc.lastSecs) : "";
   if (sc.anim) {
     const frac = sc.framesTotal ? sc.framesDone / sc.framesTotal : 0;
@@ -262,6 +262,8 @@ function renderDetails(sc, full) {
     $("dAssets").value = sc.postLoaders.join("\n");
     $("dDenoise").checked = !!sc.denoise;
     $("dDenoiseHint").textContent = state.config.denoiserValid ? (sc.denoised === true ? "last render was denoised" : sc.denoised === false ? "last denoise failed, see queue log" : "") : "no valid denoiser path in Settings";
+    $("dSizeOn").checked = !!sc.imageSize; $("dSizeRow").hidden = !sc.imageSize;
+    $("dWidth").value = sc.imageSize ? sc.imageSize[0] : ""; $("dHeight").value = sc.imageSize ? sc.imageSize[1] : "";
     $("dAnim").checked = !!sc.anim; $("dFrameFirst").value = sc.frameFirst; $("dFrameLast").value = sc.frameLast;
     $("dFrameRow").hidden = !sc.anim;
     $("dAnimHint").textContent = sc.anim ? `frames ${sc.frameFirst}-${sc.frameLast}, files ${sc.name}_NN.png` : "one image per frame, split across workers";
@@ -491,10 +493,13 @@ document.addEventListener("keydown", (e) => {
 $("dClose").onclick = () => { selected = null; $("details").hidden = true; render(); };
 $("dForm").onsubmit = (e) => {
   e.preventDefault();
+  let imageSize = null;
+  try { imageSize = sizeFrom("dSizeOn", "dWidth", "dHeight"); } catch (e2) { toast(e2.message); return; }
   act(`/api/scene/${selected}/edit`, { target: $("dTarget").value.trim(), postLoaders: $("dAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), camera: $("dCamera").value, denoise: $("dDenoise").checked,
-    anim: $("dAnim").checked, frameFirst: Number($("dFrameFirst").value), frameLast: Number($("dFrameLast").value) }, "scene saved");
+    anim: $("dAnim").checked, frameFirst: Number($("dFrameFirst").value), frameLast: Number($("dFrameLast").value), imageSize }, "scene saved");
 };
 $("dAnim").onchange = () => { $("dFrameRow").hidden = !$("dAnim").checked; };
+$("dSizeOn").onchange = () => { $("dSizeRow").hidden = !$("dSizeOn").checked; };
 $("dReset").onclick = () => act(`/api/scene/${selected}/reset`);
 $("dDone").onclick = () => act(`/api/scene/${selected}/done`);
 $("dRemove").onclick = async () => { if (confirm("Remove this scene?")) { await act(`/api/scene/${selected}/remove`); selected = null; $("details").hidden = true; render(); } };
@@ -514,6 +519,7 @@ $("btnAdd").onclick = () => {
   $("aAssets").value = sc ? sc.postLoaders.join("\n") : "";
   $("aFiles").value = "";
   $("aAnimBox").hidden = true; $("aAnim").checked = false; $("aFrameRow").hidden = true; animInfoFor = null;
+  $("aSizeOn").checked = false; $("aSizeRow").hidden = true; $("aWidth").value = ""; $("aHeight").value = "";
   $("aDenoise").checked = sc ? !!sc.denoise : false;
   $("aDenoiseHint").textContent = state.config.denoiserValid ? "" : "no valid denoiser path in Settings: the flag is kept but skipped";
   $("addDlg").hidden = false;
@@ -547,6 +553,13 @@ async function updateAddAnim() {
 $("aFiles").addEventListener("change", updateAddAnim);
 $("aFiles").addEventListener("blur", updateAddAnim);
 $("aAnim").onchange = () => { $("aFrameRow").hidden = !$("aAnim").checked; };
+$("aSizeOn").onchange = () => { $("aSizeRow").hidden = !$("aSizeOn").checked; };
+function sizeFrom(onId, wId, hId) {
+  if (!$(onId).checked) return null;
+  const w = Number($(wId).value), h = Number($(hId).value);
+  if (!(w > 0 && h > 0)) throw new Error("render size needs a positive width and height");
+  return [w, h];
+}
 $("aTargetBrowse").onclick = async () => {
   const d = await browser.open({ title: "Target folder", dirsOnly: true, start: $("aTargetDir").value || null });
   if (d) $("aTargetDir").value = d;
@@ -560,7 +573,9 @@ $("addForm").onsubmit = async (e) => {
   const files = $("aFiles").value.split("\n").map((s) => s.trim()).filter(Boolean);
   if (!files.length) { toast("no scene files"); return; }
   const anim = files.length === 1 && !$("aAnimBox").hidden && $("aAnim").checked ? { frameFirst: Number($("aFrameFirst").value), frameLast: Number($("aFrameLast").value) } : null;
-  const d = await act("/api/scenes/add", { files, targetDir: $("aTargetDir").value.trim() || null, postLoaders: $("aAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), atTop: $("aTop").checked, denoise: $("aDenoise").checked, anim });
+  let imageSize = null;
+  try { imageSize = sizeFrom("aSizeOn", "aWidth", "aHeight"); } catch (e2) { toast(e2.message); return; }
+  const d = await act("/api/scenes/add", { files, targetDir: $("aTargetDir").value.trim() || null, postLoaders: $("aAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), atTop: $("aTop").checked, denoise: $("aDenoise").checked, anim, imageSize });
   if (d) { toast(`${d.added} scene(s) added`, true); $("addDlg").hidden = true; }
 };
 
@@ -579,7 +594,7 @@ $("btnSettings").onclick = () => {
   document.querySelectorAll("input[name=sMode]").forEach((r) => (r.checked = r.value === (c.mode || "parallel")));
   document.querySelectorAll("input[data-note]").forEach((cb) => (cb.checked = (c.notifications || {})[cb.dataset.note] !== false));
   $("sTimeout").value = c.jobTimeoutS; $("sStall").value = c.stallTimeoutS; $("sAttempts").value = c.maxAttempts;
-  $("sSize").value = c.imageSize ? c.imageSize.join("x") : ""; $("sDaz").value = c.dazExe; $("sPort").value = c.webPort;
+  $("sDaz").value = c.dazExe; $("sPort").value = c.webPort;
   $("sDenoiser").value = c.denoiserExe || ""; $("sKeepOriginal").checked = !!c.denoiseKeepOriginal;
   lastInstalledExe = (c.denoiserInstall || {}).exe || null;  // an install that finished earlier is already in the field
   renderDenoiserState();
@@ -643,9 +658,8 @@ $("settingsForm").onsubmit = async (e) => {
   e.preventDefault();
   const workers = [...$("sWorkers").querySelectorAll(".worker-row")].map((r) => ({ name: r.querySelector(".wname").value.trim(), gpu: r.querySelector(".wgpu").value, enabled: r.querySelector(".wenabled").checked }));
   const modeEl = document.querySelector("input[name=sMode]:checked");
-  const size = $("sSize").value.trim();
   const body = { jobTimeoutS: Number($("sTimeout").value), stallTimeoutS: Number($("sStall").value), maxAttempts: Number($("sAttempts").value),
-    imageSize: size ? size.toLowerCase().split("x").map(Number) : [], dazExe: $("sDaz").value.trim(), webPort: Number($("sPort").value),
+    dazExe: $("sDaz").value.trim(), webPort: Number($("sPort").value),
     denoiserExe: $("sDenoiser").value.trim(), denoiseKeepOriginal: $("sKeepOriginal").checked,
     notifications: Object.fromEntries([...document.querySelectorAll("input[data-note]")].map((cb) => [cb.dataset.note, cb.checked])) };
   if (!state.running) { body.workers = workers; if (modeEl) body.mode = modeEl.value; }

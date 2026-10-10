@@ -128,6 +128,13 @@
           <span class="hint" id="dFrameHint"></span>
         </div>
       </div>
+      <div class="animbox">
+        <label class="check"><input type="checkbox" id="dSizeOn"> Override render size <span class="hint">instead of the preset's size</span></label>
+        <div class="row frames" id="dSizeRow" hidden>
+          <label>Width<input id="dWidth" type="number" min="1" step="1"></label>
+          <label>Height<input id="dHeight" type="number" min="1" step="1"></label>
+        </div>
+      </div>
       <div class="row buttons">
         <button type="submit" class="primary">Save</button>
         <button type="button" id="dReset">Reset to pending</button>
@@ -193,6 +200,13 @@
           <span class="hint" id="aFrameHint"></span>
         </div>
       </div>
+      <div class="animbox">
+        <label class="check"><input type="checkbox" id="aSizeOn"> Override render size <span class="hint">instead of the preset's size, for every scene added</span></label>
+        <div class="row frames" id="aSizeRow" hidden>
+          <label>Width<input id="aWidth" type="number" min="1" step="1" placeholder="1920"></label>
+          <label>Height<input id="aHeight" type="number" min="1" step="1" placeholder="1080"></label>
+        </div>
+      </div>
       <label class="check"><input type="checkbox" id="aDenoise"> Post-render denoise <span class="hint" id="aDenoiseHint"></span></label>
       <label class="check"><input type="checkbox" id="aTop"> Insert at the top of the queue</label>
       <div class="row buttons"><span class="spacer"></span><button type="button" data-close>Cancel</button><button type="submit" class="primary">Add</button></div>
@@ -225,7 +239,6 @@
         <label>Job timeout (s)<input id="sTimeout" type="number" min="60"></label>
         <label>Stall timeout (s)<input id="sStall" type="number" min="30"></label>
         <label>Attempts per scene<input id="sAttempts" type="number" min="1" max="5"></label>
-        <label>Image size override <span class="hint">empty = preset</span><input id="sSize" type="text" placeholder="e.g. 960x540"></label>
       </div>
       <div class="grid2">
         <label>DAZ Studio executable<input id="sDaz" type="text" class="mono"></label>

@@ -252,8 +252,10 @@ class Manager:
 
     def add_scenes(self, files: List[str], target_dir: Optional[str] = None,
                    post_loaders: Optional[List[str]] = None, at_top: bool = False, denoise: bool = False,
-                   anim: Optional[dict] = None) -> int:
-        """anim: {"frameFirst": a, "frameLast": b} renders the (single) scene as an animation."""
+                   anim: Optional[dict] = None, image_size: Optional[list] = None) -> int:
+        """anim: {"frameFirst": a, "frameLast": b} renders the (single) scene as an animation.
+        image_size: [w, h] overrides the preset's render size for every added scene."""
+        size = _parse_size(image_size)
         anim_range = None
         if anim and len(files) == 1:
             a, b = int(anim.get("frameFirst", 0)), int(anim.get("frameLast", 0))
@@ -279,6 +281,8 @@ class Manager:
                                      frame_first=anim_range[0], frame_last=anim_range[1])
                 else:
                     sc = q.add_scene(p.as_posix(), target, post_loaders, denoise=denoise)
+                if size:
+                    sc.set_image_size(size)
                 new_entries.append(sc.data)
                 added += 1
             if at_top and new_entries:
@@ -405,14 +409,18 @@ class Manager:
 
     def edit_scene(self, index: int, target: Optional[str] = None, post_loaders: Optional[List[str]] = None,
                    camera: Optional[str] = None, denoise: Optional[bool] = None, anim: Optional[bool] = None,
-                   frame_first: Optional[int] = None, frame_last: Optional[int] = None) -> None:
-        """camera: '' or None keeps 'camera saved with scene'; a label forces that camera."""
+                   frame_first: Optional[int] = None, frame_last: Optional[int] = None,
+                   image_size: Optional[list] = "keep") -> None:
+        """camera: '' or None keeps 'camera saved with scene'; a label forces that camera.
+        image_size: [w, h] sets the per-scene render size, [] or None clears it, "keep" leaves it."""
         with self.lock, self._qlock():
             sc = self._scene(index)
             if sc.state == STATE_RUNNING:
                 raise ManagerError("scene is rendering")
             if denoise is not None:
                 sc.denoise = bool(denoise)
+            if image_size != "keep":
+                sc.set_image_size(_parse_size(image_size))
             if anim is not None or frame_first is not None or frame_last is not None:
                 on = sc.anim if anim is None else bool(anim)
                 a = sc.frame_first if frame_first is None else int(frame_first)
@@ -695,6 +703,18 @@ class Manager:
             }
             snap["gpus"] = _gpus()
             return snap
+
+
+def _parse_size(value) -> Optional[tuple]:
+    """[w, h] / (w, h) -> (w, h) of positive ints; anything else -> None."""
+    try:
+        if value and len(value) == 2 and int(value[0]) > 0 and int(value[1]) > 0:
+            return int(value[0]), int(value[1])
+    except (TypeError, ValueError):
+        pass
+    if value:
+        raise ManagerError("render size needs a positive width and height")
+    return None
 
 
 def _display_file(sc) -> Optional[Path]:

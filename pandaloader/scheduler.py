@@ -252,7 +252,7 @@ class Scheduler:
         spec = JobSpec(
             scene_file=scene.file, target=target, camera_label=camera,
             result_file=str(base.with_suffix(".result.json")), post_loaders=scene.post_loaders,
-            image_size=self.cfg.image_size, settle_wait_s=self.cfg.settle_wait_s, frame=scene.frame,
+            image_size=scene.image_size or self.cfg.image_size, settle_wait_s=self.cfg.settle_wait_s, frame=scene.frame,
             scene_index=scene.index, label=scene.name, frames=frames, frame_targets=frame_targets,
         )
         job_path = write_job(spec, base.with_suffix(".dsa"))
