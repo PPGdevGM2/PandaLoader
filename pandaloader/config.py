@@ -127,6 +127,9 @@ class Config:
     web_port: int = 6969
     # Desktop balloons from the tray icon, each can be switched off in Settings.
     notifications: dict = field(default_factory=lambda: dict(DEFAULT_NOTIFICATIONS))
+    # "Denoiser OI" (Denoiser.exe) for the per-scene post-render denoise flag; empty = disabled.
+    denoiser_exe: str = ""
+    denoise_timeout_s: float = 600.0
 
     # -- derived paths -----------------------------------------------------
     def instance_dir(self, instance: str) -> Path:

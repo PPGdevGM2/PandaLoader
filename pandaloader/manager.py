@@ -223,7 +223,7 @@ class Manager:
         return self.scheduler.qlock if self.scheduler is not None else self.lock
 
     def add_scenes(self, files: List[str], target_dir: Optional[str] = None,
-                   post_loaders: Optional[List[str]] = None, at_top: bool = False) -> int:
+                   post_loaders: Optional[List[str]] = None, at_top: bool = False, denoise: bool = False) -> int:
         with self.lock, self._qlock():
             q = self._require_queue()
             if post_loaders is None:
@@ -238,7 +238,7 @@ class Manager:
                 if any(Path(s.file) == p for s in q.scenes):
                     continue
                 target = (tdir / (p.stem + ".png")).as_posix() if tdir else ""
-                sc = q.add_scene(p.as_posix(), target, post_loaders)
+                sc = q.add_scene(p.as_posix(), target, post_loaders, denoise=denoise)
                 new_entries.append(sc.data)
                 added += 1
             if at_top and new_entries:
@@ -306,13 +306,22 @@ class Manager:
             self._commit(f"reset {n} scene(s)" + (" (failed only)" if failed_only else ""))
             return n
 
+    def set_denoise(self, index: int, on: bool) -> None:
+        """Quick toggle of the post-render denoise flag; allowed while rendering (read at finish)."""
+        with self.lock, self._qlock():
+            sc = self._scene(index)
+            sc.denoise = bool(on)
+            self._commit()
+
     def edit_scene(self, index: int, target: Optional[str] = None, post_loaders: Optional[List[str]] = None,
-                   camera: Optional[str] = None) -> None:
+                   camera: Optional[str] = None, denoise: Optional[bool] = None) -> None:
         """camera: '' or None keeps 'camera saved with scene'; a label forces that camera."""
         with self.lock, self._qlock():
             sc = self._scene(index)
             if sc.state == STATE_RUNNING:
                 raise ManagerError("scene is rendering")
+            if denoise is not None:
+                sc.denoise = bool(denoise)
             if target is not None:
                 sc.target = Path(target).as_posix() if target else ""
             if post_loaders is not None:
@@ -331,8 +340,15 @@ class Manager:
                         job_timeout_s: Optional[float] = None, stall_timeout_s: Optional[float] = None,
                         max_attempts: Optional[int] = None, image_size: Optional[list] = None,
                         daz_exe: Optional[str] = None, web_port: Optional[int] = None,
-                        mode: Optional[str] = None, notifications: Optional[dict] = None) -> None:
+                        mode: Optional[str] = None, notifications: Optional[dict] = None,
+                        denoiser_exe: Optional[str] = None) -> None:
         with self.lock:
+            if denoiser_exe is not None and denoiser_exe != self.cfg.denoiser_exe:
+                from .denoise import validate_denoiser
+                self.cfg.denoiser_exe = denoiser_exe.strip()
+                ok, info = validate_denoiser(self.cfg.denoiser_exe)
+                self.status.log("denoiser: " + (f"set to {info}" if ok else f"{self.cfg.denoiser_exe or '(none)'}: {info}; denoise flags are skipped"),
+                                level="info" if ok or not self.cfg.denoiser_exe else "warning")
             if notifications is not None:
                 for k in self.cfg.notifications:
                     if k in notifications:
@@ -431,7 +447,8 @@ class Manager:
                     dirs.append(entry.name)
                     continue
                 if (kind == "scene" and entry.suffix.lower() in SCENE_EXTS) or \
-                   (kind == "queue" and entry.name.lower().endswith(QUEUE_SUFFIX)) or kind == "any":
+                   (kind == "queue" and entry.name.lower().endswith(QUEUE_SUFFIX)) or \
+                   (kind == "exe" and entry.suffix.lower() == ".exe") or kind == "any":
                     files.append({"name": entry.name, "mtime": entry.stat().st_mtime})
             except OSError:
                 continue  # one unreadable entry must not sink the listing
@@ -513,10 +530,16 @@ class Manager:
                 "maxAttempts": self.cfg.max_attempts, "imageSize": list(self.cfg.image_size) if self.cfg.image_size else None,
                 "shutdownAfterQueue": self.cfg.shutdown_after_queue, "workDir": self.cfg.work_dir,
                 "webPort": self.cfg.web_port, "mode": self.cfg.mode, "notifications": dict(self.cfg.notifications),
+                "denoiserExe": self.cfg.denoiser_exe, "denoiserValid": _denoiser_valid(self.cfg.denoiser_exe),
                 "runSlots": [w.to_dict() for w in self.cfg.run_slots()],
             }
             snap["gpus"] = _gpus()
             return snap
+
+
+def _denoiser_valid(path: str) -> bool:
+    from .denoise import validate_denoiser
+    return validate_denoiser(path)[0]
 
 
 def _gpus() -> list:

@@ -160,6 +160,8 @@ function sceneRow(sc, find) {
   const assets = sc.postLoaders.length ? `${sc.postLoaders.length} PRA` : "";
   const last = sc.lastSecs ? hms(sc.lastSecs) : "";
   const err = sc.lastError ? ` title="${esc(sc.lastError)}"` : "";
+  const dnMark = sc.denoised === true ? `<span class="dnok" title="denoised">✓</span>` : sc.denoised === false ? `<span class="dnfail" title="denoise failed, see queue log">!</span>` : "";
+  const dn = `<input type="checkbox" class="dnbox" data-act="denoise" ${sc.denoise ? "checked" : ""} title="Post-render denoise${state.config.denoiserValid ? "" : " (no valid denoiser path in Settings: flag is skipped)"}">${dnMark}`;
   return `<tr class="${cls}" data-i="${sc.index}"${err}>
     <td class="num">${sc.index + 1}</td>
     <td class="state"><span class="badge ${sc.stateName}">${esc(stateTxt)}</span></td>
@@ -168,6 +170,7 @@ function sceneRow(sc, find) {
     <td>${cam}</td>
     <td>${last}</td>
     <td class="hint">${assets}</td>
+    <td class="dn">${dn}</td>
     <td class="target mono" title="${esc(sc.target)}">${esc(sc.target)}</td>
     <td class="actions">
       <button data-act="move" data-d="-1" title="Move up">↑</button>
@@ -194,6 +197,8 @@ function renderDetails(sc, full) {
     d.dataset.index = sc.index;
     $("dTarget").value = sc.target || "";
     $("dAssets").value = sc.postLoaders.join("\n");
+    $("dDenoise").checked = !!sc.denoise;
+    $("dDenoiseHint").textContent = state.config.denoiserValid ? (sc.denoised === true ? "last render was denoised" : sc.denoised === false ? "last denoise failed, see queue log" : "") : "no valid denoiser path in Settings";
     const sel = $("dCamera");
     sel.innerHTML = `<option value="">camera saved with scene${sc.savedCamera && sc.camera ? ` (${esc(sc.camera)})` : ""}</option>`;
     if (!sc.savedCamera && sc.camera) sel.add(new Option(sc.camera, sc.camera, true, true));
@@ -305,6 +310,11 @@ $("scenes").addEventListener("click", async (ev) => {
   const btn = ev.target.closest("button[data-act]");
   const tr = ev.target.closest("tr[data-i]"); if (!tr) return;
   const i = Number(tr.dataset.i);
+  if (ev.target.classList.contains("dnbox")) {
+    ev.stopPropagation();
+    act(`/api/scene/${i}/denoise`, { on: ev.target.checked });
+    return;
+  }
   if (btn) {
     ev.stopPropagation();
     const a = btn.dataset.act;
@@ -318,7 +328,7 @@ $("scenes").addEventListener("click", async (ev) => {
 $("dClose").onclick = () => { selected = null; $("details").hidden = true; render(); };
 $("dForm").onsubmit = (e) => {
   e.preventDefault();
-  act(`/api/scene/${selected}/edit`, { target: $("dTarget").value.trim(), postLoaders: $("dAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), camera: $("dCamera").value }, "scene saved");
+  act(`/api/scene/${selected}/edit`, { target: $("dTarget").value.trim(), postLoaders: $("dAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), camera: $("dCamera").value, denoise: $("dDenoise").checked }, "scene saved");
 };
 $("dReset").onclick = () => act(`/api/scene/${selected}/reset`);
 $("dDone").onclick = () => act(`/api/scene/${selected}/done`);
@@ -338,6 +348,8 @@ $("btnAdd").onclick = () => {
   $("aTargetDir").value = sc && sc.target ? dirname(sc.target) : "";
   $("aAssets").value = sc ? sc.postLoaders.join("\n") : "";
   $("aFiles").value = "";
+  $("aDenoise").checked = sc ? !!sc.denoise : false;
+  $("aDenoiseHint").textContent = state.config.denoiserValid ? "" : "no valid denoiser path in Settings: the flag is kept but skipped";
   $("addDlg").hidden = false;
 };
 $("aBrowse").onclick = async () => {
@@ -356,7 +368,7 @@ $("addForm").onsubmit = async (e) => {
   e.preventDefault();
   const files = $("aFiles").value.split("\n").map((s) => s.trim()).filter(Boolean);
   if (!files.length) { toast("no scene files"); return; }
-  const d = await act("/api/scenes/add", { files, targetDir: $("aTargetDir").value.trim() || null, postLoaders: $("aAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), atTop: $("aTop").checked });
+  const d = await act("/api/scenes/add", { files, targetDir: $("aTargetDir").value.trim() || null, postLoaders: $("aAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), atTop: $("aTop").checked, denoise: $("aDenoise").checked });
   if (d) { toast(`${d.added} scene(s) added`, true); $("addDlg").hidden = true; }
 };
 
@@ -374,8 +386,15 @@ $("btnSettings").onclick = () => {
   document.querySelectorAll("input[data-note]").forEach((cb) => (cb.checked = (c.notifications || {})[cb.dataset.note] !== false));
   $("sTimeout").value = c.jobTimeoutS; $("sStall").value = c.stallTimeoutS; $("sAttempts").value = c.maxAttempts;
   $("sSize").value = c.imageSize ? c.imageSize.join("x") : ""; $("sDaz").value = c.dazExe; $("sPort").value = c.webPort;
+  $("sDenoiser").value = c.denoiserExe || "";
+  $("sDenoiserState").textContent = c.denoiserExe ? (c.denoiserValid ? "✓ found" : "✗ not found: denoise flags are skipped") : "not set: denoise flags are skipped";
+  $("sDenoiserState").className = "hint " + (c.denoiserExe && !c.denoiserValid ? "err" : "");
   $("sInfo").textContent = `Work dir: ${c.workDir}` + (state.running ? " · workers can be changed when not rendering" : "");
   $("settingsDlg").hidden = false;
+};
+$("sDenoiserBrowse").onclick = async () => {
+  const f = await browser.open({ title: "Pick Denoiser.exe", kind: "exe", start: dirname($("sDenoiser").value) || null });
+  if (f) $("sDenoiser").value = f;
 };
 $("sAddWorker").onclick = () => {
   const n = $("sWorkers").children.length;
@@ -389,6 +408,7 @@ $("settingsForm").onsubmit = async (e) => {
   const size = $("sSize").value.trim();
   const body = { jobTimeoutS: Number($("sTimeout").value), stallTimeoutS: Number($("sStall").value), maxAttempts: Number($("sAttempts").value),
     imageSize: size ? size.toLowerCase().split("x").map(Number) : [], dazExe: $("sDaz").value.trim(), webPort: Number($("sPort").value),
+    denoiserExe: $("sDenoiser").value.trim(),
     notifications: Object.fromEntries([...document.querySelectorAll("input[data-note]")].map((cb) => [cb.dataset.note, cb.checked])) };
   if (!state.running) { body.workers = workers; if (modeEl) body.mode = modeEl.value; }
   const newPort = body.webPort !== state.config.webPort ? body.webPort : null;

@@ -210,6 +210,9 @@ class Scheduler:
         st = self.status
         ws = st.workers[slot.name]
         attempt = self._attempts[scene.index]
+        denoise_note = None
+        if result is not None and result.ok and scene.denoise and spec is not None:
+            denoise_note = self._denoise(slot, scene, spec.target)
         with self.qlock:
             if result is not None and result.ok:
                 secs = result.render_secs or (time.time() - (ws.render_started or ws.job_started or time.time()))
@@ -220,6 +223,11 @@ class Scheduler:
                 for w in result.warnings:
                     st.log(w, level="warning", worker=slot.name)
                     self.queue.append_log(f"{slot.name}: WARNING {w}")
+                if denoise_note is not None:
+                    ok, msg = denoise_note
+                    scene.data["denoised"] = ok
+                    self.queue.append_log(f"{slot.name}: {'denoised' if ok else 'DENOISE FAILED'} {scene.name}: {msg}")
+                    st.log(f"{scene.name}: {msg}", level="info" if ok else "warning", worker=slot.name)
             elif self._stop.is_set() or (result is not None and result.killed and "stopped" in result.reason):
                 scene.mark_pending()
                 self.queue.append_log(f"{slot.name}: stopped during {scene.name}; back to pending")
@@ -241,6 +249,17 @@ class Scheduler:
             self.queue.save()
             self._publish_queue()
         st.worker_idle(slot.name)
+
+    def _denoise(self, slot: WorkerSlot, scene: Scene, target: str):
+        """Run the configured denoiser over the finished render. Returns (ok, message)."""
+        from .denoise import denoise_in_place, resolve_denoiser
+        exe = resolve_denoiser(self.cfg.denoiser_exe)
+        if exe is None:
+            return False, "denoise skipped: no valid denoiser path in Settings"
+        self.status.update_worker(slot.name, state="denoising")
+        self.status.log(f"denoising {scene.name}", worker=slot.name)
+        ok, msg, _secs = denoise_in_place(exe, target, timeout_s=self.cfg.denoise_timeout_s)
+        return ok, msg
 
     # -- housekeeping ----------------------------------------------------------
     def _publish_queue(self) -> None:

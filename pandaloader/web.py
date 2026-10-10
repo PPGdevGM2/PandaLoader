@@ -140,7 +140,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             elif route == "run/stop":
                 m.stop()
             elif route == "scenes/add":
-                n = m.add_scenes(body.get("files", []), body.get("targetDir"), body.get("postLoaders"), body.get("atTop", False))
+                n = m.add_scenes(body.get("files", []), body.get("targetDir"), body.get("postLoaders"),
+                                 body.get("atTop", False), bool(body.get("denoise", False)))
                 return self._json({"added": n})
             elif route == "scenes/reset":
                 return self._json({"reset": m.reset_all(body.get("failedOnly", False))})
@@ -155,7 +156,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                 elif action == "done":
                     m.mark_done(i)
                 elif action == "edit":
-                    m.edit_scene(i, body.get("target"), body.get("postLoaders"), body.get("camera"))
+                    m.edit_scene(i, body.get("target"), body.get("postLoaders"), body.get("camera"), body.get("denoise"))
+                elif action == "denoise":
+                    m.set_denoise(i, bool(body.get("on", True)))
                 else:
                     return self._error("not found", 404)
             elif route == "settings":
@@ -164,6 +167,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     job_timeout_s=body.get("jobTimeoutS"), stall_timeout_s=body.get("stallTimeoutS"),
                     max_attempts=body.get("maxAttempts"), image_size=body.get("imageSize"), daz_exe=body.get("dazExe"),
                     web_port=body.get("webPort"), mode=body.get("mode"), notifications=body.get("notifications"),
+                    denoiser_exe=body.get("denoiserExe"),
                 )
             else:
                 return self._error("not found", 404)

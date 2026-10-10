@@ -120,6 +120,12 @@ table.scenes td.target { color: var(--muted); max-width: 420px; overflow: hidden
 table.scenes td.actions { text-align: right; width: 150px; }
 table.scenes td.actions button { padding: 1px 6px; font-size: 12px; margin-left: 2px; visibility: hidden; }
 table.scenes tr:hover td.actions button, table.scenes tr.selected td.actions button { visibility: visible; }
+table.scenes td.dn, table.scenes th.dn { text-align: center; width: 70px; }
+table.scenes td.dn input { vertical-align: middle; cursor: pointer; }
+.dnok { color: var(--ok); margin-left: 4px; font-size: 12px; }
+.dnfail { color: var(--err); margin-left: 4px; font-weight: 700; }
+.phase.denoising { color: var(--warn); }
+.worker.denoising .bar i { background: var(--warn); }
 .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 600; letter-spacing: .3px; }
 .badge.pending { background: #3a3a3e; color: var(--muted); }
 .badge.running { background: #28384a; color: var(--run); }

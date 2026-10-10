@@ -80,6 +80,24 @@ class Scene:
     def last_error(self) -> str:
         return self.data.get("lastError", "")
 
+    # -- post-render denoise (PandaLoader addition to the format) --------------
+    @property
+    def denoise(self) -> bool:
+        return bool(self.data.get("denoise", False))
+
+    @denoise.setter
+    def denoise(self, value: bool) -> None:
+        if value:
+            self.data["denoise"] = True
+        else:  # keep the plugin's file layout untouched unless the flag is on
+            self.data.pop("denoise", None)
+            self.data.pop("denoised", None)
+
+    @property
+    def denoised(self) -> Optional[bool]:
+        """True/False after a render with the flag set, None if never attempted."""
+        return self.data.get("denoised")
+
     # -- camera --------------------------------------------------------------
     @property
     def uses_saved_camera(self) -> bool:
@@ -127,6 +145,7 @@ class Scene:
             "index": self.index, "name": self.name, "file": self.file, "target": self.target,
             "state": self.state, "stateName": self.state_name, "camera": self.camera_hint,
             "lastSecs": self.last_secs, "lastError": self.last_error,
+            "denoise": self.denoise, "denoised": self.denoised,
         }
 
 
@@ -177,12 +196,15 @@ class QueueFile:
     def scene(self, index: int) -> Scene:
         return Scene(self.data["scenes"][index], index)
 
-    def add_scene(self, file: str, target: str, post_loaders: Iterable[str] = (), frame_first: int = 0, frame_last: int = 30) -> Scene:
+    def add_scene(self, file: str, target: str, post_loaders: Iterable[str] = (), frame_first: int = 0,
+                  frame_last: int = 30, denoise: bool = False) -> Scene:
         entry = {
             "file": file, "state": STATE_PENDING, "target": target, "jobs": [], "cam": 1,
             "singleCamName": 0, "singleFrame": -1, "frameFirst": frame_first, "frameLast": frame_last,
             "postLoaders": [{"asset": a, "node": ""} for a in post_loaders], "secsRender": [],
         }
+        if denoise:
+            entry["denoise"] = True
         self.data["scenes"].append(entry)
         return Scene(entry, len(self.data["scenes"]) - 1)
 
