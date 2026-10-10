@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from . import dufinfo
+from . import dufinfo, gpumon
 from .config import MODES, MODE_COMBINED, Config, WorkerSlot, _parse_gpu
 from .queuefile import QueueFile, Scene, STATE_DONE, STATE_RUNNING
 from .scheduler import Scheduler
@@ -182,10 +182,22 @@ class Manager:
             sched = self.scheduler
         threading.Thread(target=sched.stop, kwargs={"wait": True}, name="stopper", daemon=True).start()
 
-    def shutdown_workers_now(self) -> None:
-        """Emergency: kill every DAZ worker instance we know of."""
-        for slot in self.cfg.workers:
-            subprocess.run(["taskkill", "/F", "/FI", f"WINDOWTITLE eq *[{slot.name}]*"], capture_output=True, check=False)
+    def emergency_stop(self) -> None:
+        """Fast path for Windows shutdown: scenes in flight back to pending, queue
+        saved, worker processes killed. Must finish in a couple of seconds."""
+        sched = self.scheduler
+        if sched is not None and sched.alive:
+            sched._stop.set()
+            with sched.qlock:
+                n = self.queue.reset_running() if self.queue else 0
+                if self.queue is not None and self.queue.path is not None:
+                    self.queue.append_log(f"PandaLoader: Windows shutdown; {n} scene(s) back to pending")
+                    self.queue.save()
+            for run in list(sched._runs.values()):
+                proc = run.proc
+                if proc is not None and proc.poll() is None:
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, check=False, timeout=3)
+        self.status.log("stopped for Windows shutdown", level="warning")
 
     def _on_finished(self) -> None:
         if self.cfg.shutdown_after_queue:
@@ -319,8 +331,12 @@ class Manager:
                         job_timeout_s: Optional[float] = None, stall_timeout_s: Optional[float] = None,
                         max_attempts: Optional[int] = None, image_size: Optional[list] = None,
                         daz_exe: Optional[str] = None, web_port: Optional[int] = None,
-                        mode: Optional[str] = None) -> None:
+                        mode: Optional[str] = None, notifications: Optional[dict] = None) -> None:
         with self.lock:
+            if notifications is not None:
+                for k in self.cfg.notifications:
+                    if k in notifications:
+                        self.cfg.notifications[k] = bool(notifications[k])
             if mode is not None and mode != self.cfg.mode:
                 if self.running:
                     raise ManagerError("cannot change the scheduling mode while rendering")
@@ -496,48 +512,16 @@ class Manager:
                 "jobTimeoutS": self.cfg.job_timeout_s, "stallTimeoutS": self.cfg.stall_timeout_s,
                 "maxAttempts": self.cfg.max_attempts, "imageSize": list(self.cfg.image_size) if self.cfg.image_size else None,
                 "shutdownAfterQueue": self.cfg.shutdown_after_queue, "workDir": self.cfg.work_dir,
-                "webPort": self.cfg.web_port, "mode": self.cfg.mode,
+                "webPort": self.cfg.web_port, "mode": self.cfg.mode, "notifications": dict(self.cfg.notifications),
                 "runSlots": [w.to_dict() for w in self.cfg.run_slots()],
             }
             snap["gpus"] = _gpus()
             return snap
 
 
-_GPU_CACHE = {"t": 0.0, "v": []}
-
-
 def _gpus() -> list:
-    """Names of the CUDA devices, via nvidia-smi, cached for a minute."""
-    if time.time() - _GPU_CACHE["t"] < 60:
-        return _GPU_CACHE["v"]
-    out = []
-    try:
-        r = subprocess.run(["nvidia-smi", "--query-gpu=index,name", "--format=csv,noheader"],
-                           capture_output=True, text=True, timeout=5, check=False)
-        for line in r.stdout.splitlines():
-            idx, _, name = line.partition(",")
-            if idx.strip().isdigit():
-                out.append({"index": int(idx), "name": name.strip()})
-    except (OSError, subprocess.SubprocessError):
-        pass
-    _GPU_CACHE.update(t=time.time(), v=out)
-    return out
-
-
-def documents_dir() -> Path:
-    """The user's Documents folder (Windows known folder), falling back to the home dir."""
-    if os.name == "nt":
-        try:
-            import ctypes
-            from ctypes import wintypes
-            buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
-            # CSIDL_PERSONAL = 5 -> "My Documents", honours a relocated Documents folder
-            if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and buf.value:
-                return Path(buf.value)
-        except (OSError, AttributeError):
-            pass
-    d = Path.home() / "Documents"
-    return d if d.is_dir() else Path.home()
+    """Latest GPU telemetry sample (see gpumon)."""
+    return gpumon.gpus()
 
 
 def _drives() -> list:

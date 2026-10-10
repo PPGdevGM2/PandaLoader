@@ -149,15 +149,34 @@ def _running_instance(port: int):
     return None
 
 
-def _message_box(text: str, title: str = "PandaLoader") -> None:
+def _message_box(text: str, title: str = "PandaLoader", icon: int = 0x10, background: bool = False) -> None:
+    """Modal Windows message box (0x10 error, 0x30 warning). background=True shows it
+    from a thread so the caller is not blocked until the user clicks OK."""
     if os.name == "nt":
         try:
             import ctypes
-            ctypes.windll.user32.MessageBoxW(None, text, title, 0x10)  # MB_ICONERROR
+
+            def show() -> None:
+                ctypes.windll.user32.MessageBoxW(None, text, title, icon | 0x1000)  # MB_SYSTEMMODAL: on top
+
+            if background:
+                threading.Thread(target=show, name="msgbox", daemon=True).start()
+            else:
+                show()
             return
         except Exception:  # noqa: BLE001
             pass
     print(f"{title}: {text}", file=sys.stderr)
+
+
+def _check_nvidia_smi(manager) -> None:
+    """Mandatory warning when nvidia-smi is missing; not covered by the notification switches."""
+    from .gpumon import NVIDIA_SMI_MISSING_TEXT, find_nvidia_smi
+    if find_nvidia_smi():
+        return
+    manager.status.log("nvidia-smi not found: GPU gauges unavailable", level="warning")
+    logging.getLogger("pandaloader").warning("nvidia-smi not found")
+    _message_box(NVIDIA_SMI_MISSING_TEXT, "PandaLoader: nvidia-smi missing", icon=0x30, background=True)
 
 
 def _start_app(args):
@@ -219,6 +238,7 @@ def cmd_serve(args) -> int:
         print(f"web UI moved to {new.url}", flush=True)
 
     manager.on_port_change = rebind
+    _check_nvidia_smi(manager)
     print(f"PandaLoader web UI: {server.url}  (Ctrl+C to quit)", flush=True)
     if not args.no_browser:
         server.open_browser()
@@ -247,6 +267,7 @@ def cmd_tray(args) -> int:
         _message_box(f"PandaLoader could not start:\n\n{e}")
         return 1
     app = TrayApp(manager, server, manager.cfg.web_host)
+    _check_nvidia_smi(manager)
     if args.open:
         server.open_browser()
     try:

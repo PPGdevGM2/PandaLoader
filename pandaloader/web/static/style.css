@@ -76,6 +76,22 @@ input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); bo
 .worker .stats { display: flex; gap: 14px; color: var(--muted); font-size: 12.5px; }
 .worker .stats b { color: var(--text); font-weight: 500; }
 .worker .err { color: var(--err); font-size: 12px; margin-top: 4px; }
+.worker .body { display: flex; gap: 12px; align-items: stretch; }
+.worker .body .main { flex: 1; min-width: 0; }
+.worker .gtoggle { background: none; border: none; padding: 0 2px; margin-left: 8px; color: var(--muted); font-size: 14px; line-height: 1; }
+.worker .gtoggle:hover { color: var(--text); }
+.gauges { display: flex; gap: 10px; flex: none; }
+.gpu-gauges { display: flex; flex-direction: column; align-items: center; gap: 2px; padding-left: 10px; border-left: 1px solid var(--line); }
+.gpu-gauges .gtitle { font-size: 10.5px; color: var(--muted); letter-spacing: .4px; }
+.gauge { display: flex; flex-direction: column; align-items: center; }
+.gauge svg { width: 46px; height: 46px; transform: rotate(-90deg); }
+.gauge .track { fill: none; stroke: #151517; stroke-width: 4; }
+.gauge .fill { fill: none; stroke-width: 4; stroke-linecap: butt; transition: stroke-dasharray .6s ease; }
+.gauge.vram .fill { stroke: var(--run); }
+.gauge.cuda .fill { stroke: var(--accent); }
+.gauge text { font-size: 9px; fill: var(--text); text-anchor: middle; transform: rotate(90deg); transform-origin: 18px 18px; font-family: var(--sans); }
+.gauge .glabel { font-size: 10px; color: var(--muted); margin-top: -2px; }
+.worker.idle .gauges { opacity: 1; }
 .worker.idle { opacity: .7; }
 .phase.rendering { color: var(--accent); }
 .phase.loading, .phase.starting { color: var(--run); }
@@ -134,6 +150,7 @@ table.scenes tr:hover td.actions button, table.scenes tr.selected td.actions but
 .worker-row .wtoggle { display: flex; align-items: center; margin: 0; }
 .form .mode { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
 .form .mode label { margin: 4px 0; }
+.form fieldset .grid2 label.check { margin: 4px 0; }
 
 /* log */
 .log { padding: 8px 16px 12px; }

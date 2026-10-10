@@ -183,6 +183,15 @@
         <label>DAZ Studio executable<input id="sDaz" type="text" class="mono"></label>
         <label>Web UI port <span class="hint">the page reloads on the new port</span><input id="sPort" type="number" min="1024" max="65535"></label>
       </div>
+      <fieldset>
+        <legend>Desktop notifications <span class="hint">balloons from the tray icon</span></legend>
+        <div class="grid2">
+          <label class="check"><input type="checkbox" data-note="failed"> Render failed <span class="hint">also on an attempt that is retried</span></label>
+          <label class="check"><input type="checkbox" data-note="finished"> Queue finished <span class="hint">or PC about to shut down</span></label>
+          <label class="check"><input type="checkbox" data-note="port"> Web UI moved to another port</label>
+          <label class="check"><input type="checkbox" data-note="errors"> Tray action refused <span class="hint">e.g. Render with nothing pending</span></label>
+        </div>
+      </fieldset>
       <div class="hint" id="sInfo"></div>
       <div class="row buttons"><span class="spacer"></span><button type="button" data-close>Cancel</button><button type="submit" class="primary">Save</button></div>
     </form>

@@ -85,8 +85,39 @@ function render() {
   renderLog();
 }
 
+// ---------- GPU gauges ----------
+function gaugesHidden(name) { try { return localStorage.getItem("gauges:" + name) === "hidden"; } catch (e) { return false; } }
+function setGaugesHidden(name, hidden) { try { localStorage.setItem("gauges:" + name, hidden ? "hidden" : "shown"); } catch (e) {} }
+function donut(frac, label, value, cls) {
+  const r = 15.9155, pct = Math.max(0, Math.min(1, frac || 0)) * 100;
+  return `<div class="gauge ${cls}"><svg viewBox="0 0 36 36"><circle class="track" cx="18" cy="18" r="${r}"/><circle class="fill" cx="18" cy="18" r="${r}" stroke-dasharray="${pct.toFixed(1)} ${(100 - pct).toFixed(1)}"/><text x="18" y="20.5">${esc(value)}</text></svg><span class="glabel">${esc(label)}</span></div>`;
+}
+function workerGpus(w) {
+  const all = state.gpus || [];
+  if (w.gpu == null || w.gpu === "") return all;
+  const idx = String(w.gpu).split(",").map((x) => Number(x));
+  return all.filter((g) => idx.includes(g.index));
+}
+function gaugesHtml(w) {
+  const gpus = workerGpus(w);
+  if (!gpus.length) return "";
+  return `<div class="gauges">${gpus.map((g) => {
+    const used = g.memUsed == null ? 0 : g.memUsed / 1024, total = g.memTotal ? g.memTotal / 1024 : 0;
+    const tip = [g.name, g.temp != null ? `${g.temp} °C` : "", g.d3d != null ? `3D ${Math.round(g.d3d)}%` : "", g.util != null ? `total ${Math.round(g.util)}%` : ""].filter(Boolean).join(" · ");
+    const cuda = g.cuda != null ? g.cuda : null;  // Cuda engine (Task Manager's "Cuda"), not the chip-wide load
+    return `<div class="gpu-gauges" title="${esc(tip)}"><span class="gtitle">GPU ${g.index}</span>`
+      + donut(total ? used / total : 0, "VRAM", total ? `${used.toFixed(1)}G` : "n/a", "vram")
+      + donut((cuda || 0) / 100, "CUDA", cuda == null ? "n/a" : `${Math.round(cuda)}%`, "cuda") + `</div>`;
+  }).join("")}</div>`;
+}
+function gaugeToggle(w) {
+  const hidden = gaugesHidden(w.name);
+  return `<button class="gtoggle" data-worker="${esc(w.name)}" title="${hidden ? "Show" : "Hide"} GPU gauges">${hidden ? "◔" : "◕"}</button>`;
+}
+
 function workerCard(w) {
   const st = w.state || "idle";
+  const gauges = gaugesHidden(w.name) ? "" : gaugesHtml(w);
   let frac = 0;
   if (st === "starting") frac = 0.03;
   else if (st === "loading") frac = 0.1;
@@ -94,12 +125,15 @@ function workerCard(w) {
   else if (st === "saving" || st === "finished") frac = 1;
   const gpu = w.gpu == null ? "all GPUs" : `GPU ${w.gpu}`;
   if (st === "idle") {
-    return `<div class="worker idle"><div class="head"><span class="wname">${esc(w.name)}</span><span class="gpu">${gpu}</span><span class="phase idle">idle</span></div>
+    return `<div class="worker idle"><div class="head"><span class="wname">${esc(w.name)}</span><span class="gpu">${gpu}</span><span class="phase idle">idle</span>${gaugeToggle(w)}</div>
+      <div class="body"><div class="main">
       <div class="scene">&nbsp;</div><div class="bar"><i></i></div>
-      <div class="stats"><span>done <b>${w.jobsDone}</b></span><span>failed <b>${w.jobsFailed}</b></span>${w.lastError ? `<span class="err">${esc(w.lastError)}</span>` : ""}</div></div>`;
+      <div class="stats"><span>done <b>${w.jobsDone}</b></span><span>failed <b>${w.jobsFailed}</b></span>${w.lastError ? `<span class="err">${esc(w.lastError)}</span>` : ""}</div>
+      </div>${gauges}</div></div>`;
   }
   return `<div class="worker ${st}">
-    <div class="head"><span class="wname">${esc(w.name)}</span><span class="gpu">${gpu}</span><span class="phase ${st}">${st}</span></div>
+    <div class="head"><span class="wname">${esc(w.name)}</span><span class="gpu">${gpu}</span><span class="phase ${st}">${st}</span>${gaugeToggle(w)}</div>
+    <div class="body"><div class="main">
     <div class="scene">${esc(w.sceneName)}<span class="cam">${esc(w.camera || "")}</span></div>
     <div class="bar"><i style="width:${(frac * 100).toFixed(1)}%"></i></div>
     <div class="stats">
@@ -110,8 +144,13 @@ function workerCard(w) {
       <span class="spacer"></span><span>done ${w.jobsDone}${w.jobsFailed ? ` · failed ${w.jobsFailed}` : ""}</span>
     </div>
     ${w.lastError ? `<div class="err">${esc(w.lastError)}</div>` : ""}
+    </div>${gauges}</div>
   </div>`;
 }
+$("workers").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button.gtoggle"); if (!b) return;
+  setGaugesHidden(b.dataset.worker, !gaugesHidden(b.dataset.worker)); render();
+});
 
 function sceneRow(sc, find) {
   const found = find && (sc.name.toLowerCase().includes(find) || (sc.camera || "").toLowerCase().includes(find));
@@ -332,6 +371,7 @@ $("btnSettings").onclick = () => {
   const c = state.config;
   $("sWorkers").innerHTML = c.workers.map((w) => workerRowHtml(w, state.gpus)).join("");
   document.querySelectorAll("input[name=sMode]").forEach((r) => (r.checked = r.value === (c.mode || "parallel")));
+  document.querySelectorAll("input[data-note]").forEach((cb) => (cb.checked = (c.notifications || {})[cb.dataset.note] !== false));
   $("sTimeout").value = c.jobTimeoutS; $("sStall").value = c.stallTimeoutS; $("sAttempts").value = c.maxAttempts;
   $("sSize").value = c.imageSize ? c.imageSize.join("x") : ""; $("sDaz").value = c.dazExe; $("sPort").value = c.webPort;
   $("sInfo").textContent = `Work dir: ${c.workDir}` + (state.running ? " · workers can be changed when not rendering" : "");
@@ -348,7 +388,8 @@ $("settingsForm").onsubmit = async (e) => {
   const modeEl = document.querySelector("input[name=sMode]:checked");
   const size = $("sSize").value.trim();
   const body = { jobTimeoutS: Number($("sTimeout").value), stallTimeoutS: Number($("sStall").value), maxAttempts: Number($("sAttempts").value),
-    imageSize: size ? size.toLowerCase().split("x").map(Number) : [], dazExe: $("sDaz").value.trim(), webPort: Number($("sPort").value) };
+    imageSize: size ? size.toLowerCase().split("x").map(Number) : [], dazExe: $("sDaz").value.trim(), webPort: Number($("sPort").value),
+    notifications: Object.fromEntries([...document.querySelectorAll("input[data-note]")].map((cb) => [cb.dataset.note, cb.checked])) };
   if (!state.running) { body.workers = workers; if (modeEl) body.mode = modeEl.value; }
   const newPort = body.webPort !== state.config.webPort ? body.webPort : null;
   const d = await act("/api/settings", body, "settings saved");

@@ -31,6 +31,13 @@ def localappdata() -> Path:
     return Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
 
 
+DEFAULT_NOTIFICATIONS = {
+    "failed": True,    # a render job failed (including a failed attempt that is retried)
+    "finished": True,  # the queue finished (or the PC is about to shut down)
+    "port": True,      # the web UI moved to another port
+    "errors": True,    # a tray menu action was refused
+}
+
 MODE_PARALLEL = "parallel"   # one scene per enabled worker
 MODE_COMBINED = "combined"   # one scene at a time, all enabled workers' GPUs in one DAZ instance
 MODES = (MODE_PARALLEL, MODE_COMBINED)
@@ -118,6 +125,8 @@ class Config:
     image_size: Optional[tuple] = None # (w, h) override; None = take it from the preset
     web_host: str = "0.0.0.0"
     web_port: int = 6969
+    # Desktop balloons from the tray icon, each can be switched off in Settings.
+    notifications: dict = field(default_factory=lambda: dict(DEFAULT_NOTIFICATIONS))
 
     # -- derived paths -----------------------------------------------------
     def instance_dir(self, instance: str) -> Path:
@@ -160,6 +169,11 @@ class Config:
         d["workers"] = [w for w in workers if w.name] or cls().workers
         if d.get("mode") not in MODES:
             d["mode"] = MODE_PARALLEL
+        notes = dict(DEFAULT_NOTIFICATIONS)
+        for k, v in (d.get("notifications") or {}).items():
+            if k in notes:
+                notes[k] = bool(v)
+        d["notifications"] = notes
         if d.get("image_size"):
             d["image_size"] = tuple(int(x) for x in d["image_size"])
         known = set(cls.__dataclass_fields__)

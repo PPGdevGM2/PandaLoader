@@ -8,6 +8,7 @@ from Status.tooltip() every two seconds.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from functools import partial
@@ -23,6 +24,8 @@ from .web import STATIC, WebServer
 log = logging.getLogger("pandaloader.tray")
 
 PORT_CHOICES = [6969, 8080, 8765, 8000, 5000, 3000]
+WM_QUERYENDSESSION = 0x0011
+WM_ENDSESSION = 0x0016
 COLORS = {
     "idle": (120, 120, 128), "rendering": (255, 191, 255), "paused": (240, 182, 74),
     "done": (127, 212, 138), "failed": (240, 106, 106),
@@ -61,8 +64,48 @@ class TrayApp:
         self._icon_key = None
         self._stop = threading.Event()
         self.icon = pystray.Icon("PandaLoader", draw_icon(self.logo, "idle", 0.0), "PandaLoader", menu=self._menu())
+        self._install_session_handlers()
         manager.on_port_change = self.rebind
         manager.status.listeners.append(self._on_event)
+        purge_stale_tray_icons()  # ghosts of earlier, killed instances
+
+    # -- Windows shutdown / logoff ----------------------------------------------------
+    def _install_session_handlers(self) -> None:
+        """Answer WM_QUERYENDSESSION with yes and exit cleanly on WM_ENDSESSION.
+
+        pystray returns 0 for messages it does not know, which for
+        WM_QUERYENDSESSION means "block the shutdown" and makes Windows show
+        the "waiting for PandaLoader" screen.
+        """
+        handlers = getattr(self.icon, "_message_handlers", None)
+        if handlers is None:
+            return
+        handlers[WM_QUERYENDSESSION] = lambda wparam, lparam: 1
+        handlers[WM_ENDSESSION] = self._on_endsession
+
+    def _on_endsession(self, wparam, lparam) -> int:
+        if wparam:  # the session really ends (0 = a previous query was cancelled)
+            log.info("Windows ends the session; shutting down")
+            self.shutdown_fast()
+        return 0
+
+    def shutdown_fast(self) -> None:
+        """Save state and exit within the few seconds Windows grants at shutdown."""
+        self._stop.set()
+        threading.Timer(4.0, lambda: os._exit(0)).start()  # hard stop if anything below hangs
+        try:
+            self.manager.emergency_stop()
+        except Exception:  # noqa: BLE001
+            log.exception("emergency stop failed")
+        try:
+            self.server.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.icon.visible = False
+            self.icon.stop()
+        except Exception:  # noqa: BLE001
+            pass
 
     # -- menu ----------------------------------------------------------------
     def _menu(self) -> pystray.Menu:
@@ -135,7 +178,7 @@ class TrayApp:
         new.start()
         self.server = new
         old.stop()  # synchronous: shutdown waits for the accept loop, then the socket closes
-        self.notify(f"web UI now on {new.url}", "PandaLoader")
+        self.notify(f"web UI now on {new.url}", "PandaLoader", kind="port")
         self.manager.status.log(f"web UI moved to port {port}")
 
     def quit(self, icon=None, item=None) -> None:
@@ -149,9 +192,13 @@ class TrayApp:
             except Exception:  # noqa: BLE001
                 pass
             self.icon.stop()
+            purge_stale_tray_icons()
 
     # -- feedback --------------------------------------------------------------------
-    def notify(self, message: str, title: str = "PandaLoader") -> None:
+    def notify(self, message: str, title: str = "PandaLoader", kind: str = "errors") -> None:
+        """Show a balloon unless the user switched this kind off in Settings."""
+        if not self.manager.cfg.notifications.get(kind, True):
+            return
         try:
             self.icon.notify(message[:250], title)
         except Exception:  # noqa: BLE001
@@ -160,9 +207,9 @@ class TrayApp:
     def _on_event(self, ev: dict) -> None:
         msg = ev.get("msg", "")
         if ev.get("level") == "error" and msg.startswith("failed "):
-            self.notify(f"[{ev.get('worker')}] {msg}", "Render failed")
+            self.notify(f"[{ev.get('worker')}] {msg}", "Render failed", kind="failed")
         elif msg.startswith("queue finished"):
-            self.notify(msg, "Queue finished")
+            self.notify(msg, "Queue finished", kind="finished")
 
     def _state_and_progress(self) -> tuple:
         m, st = self.manager, self.manager.status
@@ -200,6 +247,44 @@ class TrayApp:
     def run(self) -> None:
         threading.Thread(target=self._ticker, name="tray-tick", daemon=True).start()
         self.icon.run()
+
+
+def purge_stale_tray_icons() -> None:
+    """Make Explorer drop notification icons whose process is gone.
+
+    Explorer only removes a dead icon when the mouse passes over it. Sweeping
+    WM_MOUSEMOVE across the notification toolbars (visible and overflow)
+    triggers that check for every slot. Harmless for live icons.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        user32.FindWindowW.restype = wintypes.HWND
+        user32.FindWindowExW.restype = wintypes.HWND
+        WM_MOUSEMOVE = 0x0200
+
+        def sweep(hwnd) -> None:
+            if not hwnd:
+                return
+            rect = wintypes.RECT()
+            if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
+                return
+            step = 8
+            for y in range(step // 2, max(rect.bottom, 1), step):
+                for x in range(step // 2, max(rect.right, 1), step):
+                    user32.SendMessageTimeoutW(hwnd, WM_MOUSEMOVE, 0, (y << 16) | (x & 0xFFFF), 0x0002, 50, None)
+
+        tray = user32.FindWindowW("Shell_TrayWnd", None)
+        notify = user32.FindWindowExW(tray, None, "TrayNotifyWnd", None) if tray else None
+        pager = user32.FindWindowExW(notify, None, "SysPager", None) if notify else None
+        sweep(user32.FindWindowExW(pager or notify, None, "ToolbarWindow32", None) if (pager or notify) else None)
+        overflow = user32.FindWindowW("NotifyIconOverflowWindow", None)
+        sweep(user32.FindWindowExW(overflow, None, "ToolbarWindow32", None) if overflow else None)
+    except Exception:  # noqa: BLE001
+        log.debug("tray purge failed", exc_info=True)
 
 
 def ask_port(current: int) -> Optional[int]:
