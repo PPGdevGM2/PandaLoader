@@ -3,12 +3,12 @@
 The log carries everything the manager needs for progress and failure
 detection, so the job script does not have to report anything itself:
 
-    [INFO] :: Begin asset load (open): /D:/.../Scene12055.duf
+    [INFO] :: Begin asset load (open): /C:/.../MyScene.duf
     [INFO] :: Rendering image...
     Iray [INFO] - IRAY:RENDER :: 1.0 IRAY rend info : Received update to 00625.54 iterations after 21.621 s.
     Iray [INFO] - IRAY:RENDER :: 1.0 IRAY rend progr: Convergence threshold reached.
     Iray [INFO] - IRAY:RENDER :: 1.0 IRAY rend info : Device statistics at rendering done:
-    Iray [INFO] - IRAY:RENDER :: 1.0 IRAY rend info :    CUDA device 0 (NVIDIA GeForce RTX 4090): 1784.0 spp, ...
+    Iray [INFO] - IRAY:RENDER :: 1.0 IRAY rend info :    CUDA device 0 (NVIDIA GeForce RTX ...): 1784.0 spp, ...
     [INFO] :: Saved image: C:\\...\\out.png
     [INFO] :: Finished rendering.
     [INFO] :: Script executed successfully: ...

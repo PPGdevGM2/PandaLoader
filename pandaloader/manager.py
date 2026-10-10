@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from . import dufinfo, gpumon
+from . import __version__, dufinfo, gpumon
 from .config import MODES, MODE_COMBINED, Config, WorkerSlot, _parse_gpu
 from .queuefile import QueueFile, Scene, STATE_DONE, STATE_RUNNING
 from .scheduler import Scheduler
@@ -50,7 +50,7 @@ class Manager:
         for slot in cfg.run_slots():
             self.status.add_worker(slot.name, slot.gpu)
         self.status.shutdown_after_queue = cfg.shutdown_after_queue
-        self.status.log("PandaLoader started")
+        self.status.log(f"PandaLoader {__version__} started")
 
     # -- persistence of the manager's own little state ------------------------
     def _load_state(self) -> None:
@@ -629,6 +629,7 @@ class Manager:
             snap = self.status.snapshot()
             snap["running"] = self.running
             snap["firstRun"] = self.first_run
+            snap["version"] = __version__
             snap["shutdownAt"] = self.shutdown_at if self.shutdown_pending else None
             q = self.queue
             scenes = []

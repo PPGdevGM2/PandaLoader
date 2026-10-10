@@ -18,6 +18,7 @@ from typing import Callable, Optional
 import pystray
 from PIL import Image, ImageDraw
 
+from . import __version__
 from .manager import Manager, ManagerError
 from .web import STATIC, WebServer
 
@@ -111,7 +112,7 @@ class TrayApp:
     def _menu(self) -> pystray.Menu:
         m, item = self.manager, pystray.MenuItem
         return pystray.Menu(
-            item("Open PandaLoader", self.open_ui, default=True),
+            item(f"Open PandaLoader {__version__}", self.open_ui, default=True),
             item(lambda _: self._headline(), None, enabled=False),
             pystray.Menu.SEPARATOR,
             item("Render", self._safe(m.start), visible=lambda _: not m.running and m.queue is not None),

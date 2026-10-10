@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
+from . import __version__
 from .manager import Manager, ManagerError
 
 log = logging.getLogger("pandaloader.web")
@@ -25,7 +26,8 @@ STATIC = Path(__file__).parent / "web" / "static"
 
 class ApiHandler(BaseHTTPRequestHandler):
     manager: Manager  # set on the server class
-    server_version = "PandaLoader/0.1"
+    server_version = f"PandaLoader/{__version__}"
+    sys_version = ""  # no Python version in the Server header
 
     def log_message(self, fmt, *args):  # keep the console quiet
         log.debug("%s " + fmt, self.address_string(), *args)

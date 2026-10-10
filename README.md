@@ -16,6 +16,13 @@ Web UI on port 6969 by default, tray icon for quick actions.
 7. **Denoise (optional).** *Settings → Denoiser → Install* downloads [Denoiser OI](https://github.com/DeclanRussell/IntelOIDenoiser) into the work dir.
 8. Open a queue (`.rq.json`) or create a new one, add scenes, press **Render**.
 
+## Tested with
+
+DAZ Studio 6.25 (Iray) on Windows 10/11 with NVIDIA GPUs. The log parsing, the per-instance
+log folder (`%APPDATA%\DAZ 3D\Studio6 [<worker>]`) and the headless flags were verified against
+that build; if a later DAZ changes them, those are the first things to check.
+Denoising was tested with Denoiser OI 1.6.
+
 ## Files
 
 Config, logs, job scripts and thumbnails live in `%LOCALAPPDATA%\PandaLoader` (`config.json`, `pandaloader.log`, `jobs\`).
@@ -25,8 +32,17 @@ Port: `PandaLoader.exe --port 6969`, or the tray menu → Port.
 
 ```bat
 py -3.11 -m venv .venv
-.venv\Scripts\pip install -r requirements.txt pyinstaller
+.venv\Scripts\pip install -r requirements.txt
 .venv\Scripts\pyinstaller PandaLoader.spec
 ```
 
-Result: `dist\PandaLoader.exe` (single file, windowed).
+Result: `dist\PandaLoader.exe` (single file, windowed). The version comes from
+`pandaloader/__init__.py` and shows up in the page header, the tray menu and the exe's file
+properties. Development run without building: `.venv\Scripts\python -m pandaloader tray --open`.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The exe bundles [pystray](https://github.com/moses-palmer/pystray)
+(LGPL-3.0, unmodified) and [Pillow](https://python-pillow.org/) (MIT-CMU); their license texts are in
+[licenses/](licenses/). As required by the LGPL, pystray can be replaced with your own version by
+rebuilding the exe from this source with the steps above.

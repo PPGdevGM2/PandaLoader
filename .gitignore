@@ -1,5 +1,6 @@
 /reference
 .claude/
+version_info.py
 
 .venv/
 __pycache__/

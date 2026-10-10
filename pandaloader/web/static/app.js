@@ -64,6 +64,7 @@ function render() {
   if (!$("settingsDlg").hidden) renderDenoiserState();
   maybeShowSetup();
   // header
+  $("version").textContent = s.version ? `v${s.version}` : "";
   $("queueName").textContent = q.path ? base(q.path).replace(/\.rq\.json$/, "") : "no queue open";
   $("queuePath").textContent = q.path || "";
   const etaTxt = s.running ? ` · ETA <b>${hms(q.eta)}</b>` : (s.finished ? " · finished" : "");
