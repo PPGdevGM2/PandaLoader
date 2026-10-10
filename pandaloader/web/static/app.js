@@ -592,6 +592,7 @@ $("btnSettings").onclick = () => {
   const c = state.config;
   $("sWorkers").innerHTML = c.workers.map((w) => workerRowHtml(w, state.gpus)).join("");
   document.querySelectorAll("input[name=sMode]").forEach((r) => (r.checked = r.value === (c.mode || "parallel")));
+  document.querySelectorAll("input[name=sAnim]").forEach((r) => (r.checked = r.value === (c.animSplit ? "split" : "whole")));
   document.querySelectorAll("input[data-note]").forEach((cb) => (cb.checked = (c.notifications || {})[cb.dataset.note] !== false));
   $("sTimeout").value = c.jobTimeoutS; $("sStall").value = c.stallTimeoutS; $("sAttempts").value = c.maxAttempts;
   $("sDaz").value = c.dazExe; $("sPort").value = c.webPort;
@@ -663,6 +664,8 @@ $("settingsForm").onsubmit = async (e) => {
     denoiserExe: $("sDenoiser").value.trim(), denoiseKeepOriginal: $("sKeepOriginal").checked,
     notifications: Object.fromEntries([...document.querySelectorAll("input[data-note]")].map((cb) => [cb.dataset.note, cb.checked])) };
   if (!state.running) { body.workers = workers; if (modeEl) body.mode = modeEl.value; }
+  const animEl = document.querySelector("input[name=sAnim]:checked");
+  if (animEl) body.animSplit = animEl.value === "split";
   const newPort = body.webPort !== state.config.webPort ? body.webPort : null;
   const d = await act("/api/settings", body, "settings saved");
   if (d) {

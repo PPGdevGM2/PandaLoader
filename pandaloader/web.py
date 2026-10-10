@@ -187,6 +187,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     job_timeout_s=body.get("jobTimeoutS"), stall_timeout_s=body.get("stallTimeoutS"),
                     max_attempts=body.get("maxAttempts"), image_size=body.get("imageSize"), daz_exe=body.get("dazExe"),
                     web_port=body.get("webPort"), mode=body.get("mode"), notifications=body.get("notifications"),
+                    anim_split=body.get("animSplit"),
                     denoiser_exe=body.get("denoiserExe"), denoise_keep_original=body.get("denoiseKeepOriginal"),
                 )
             else:

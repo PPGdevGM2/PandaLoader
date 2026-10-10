@@ -122,6 +122,9 @@ class Config:
     default_render_secs: float = 510.0 # ETA fallback when a scene has no history
     startup_overhead_s: float = 70.0   # process start + scene load, for ETA
     shutdown_after_queue: bool = False
+    # Animations: False = one worker renders all frames in one DAZ instance (like a manual
+    # render); True = the missing frames are divided among the idle workers, one instance each.
+    anim_split: bool = False
     image_size: Optional[tuple] = None # (w, h) override; None = take it from the preset
     web_host: str = "0.0.0.0"
     web_port: int = 6969

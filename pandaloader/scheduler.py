@@ -157,9 +157,10 @@ class Scheduler:
             return False
 
     def _claim(self, slot: WorkerSlot) -> Tuple[Optional[Scene], Optional[List[int]]]:
-        """Next unit of work in queue order: a pending still, or a block of frames of an
-        animation. Several workers may share one animation; each takes a slice of the
-        frames nobody has finished or claimed yet, sized so the slots divide the rest."""
+        """Next unit of work in queue order: a pending still, or frames of an animation.
+        By default one worker takes every frame still missing and renders them in a single
+        DAZ process; with cfg.anim_split the missing frames are divided among the free
+        workers instead, each rendering its share in one process."""
         with self.qlock:
             for scene in self.queue.scenes:
                 if scene.anim:
@@ -169,8 +170,18 @@ class Scheduler:
                     remaining = [f for f in scene.frames_remaining() if f not in busy]
                     if not remaining:
                         continue
-                    size = max(1, math.ceil(len(remaining) / max(1, len(self.slots))))
-                    block = remaining[:size]
+                    if self.cfg.anim_split:
+                        # Divide what is left among the workers that are free right now, so each
+                        # worker launches DAZ once per animation and renders its share in one process.
+                        busy_slots = set(self._runs) | {s for blocks in self._anim_running.values() for s in blocks}
+                        free = max(1, len(self.slots) - len(busy_slots))
+                        size = max(1, math.ceil(len(remaining) / free))
+                        block = remaining[:size]
+                    else:
+                        # One worker renders the whole animation, as a manual render would.
+                        if self._anim_running[scene.index]:
+                            continue
+                        block = remaining
                     self._anim_running[scene.index][slot.name] = block
                     scene.mark_running()
                     self._attempts[scene.index] += 1

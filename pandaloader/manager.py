@@ -488,8 +488,12 @@ class Manager:
                         max_attempts: Optional[int] = None, image_size: Optional[list] = None,
                         daz_exe: Optional[str] = None, web_port: Optional[int] = None,
                         mode: Optional[str] = None, notifications: Optional[dict] = None,
-                        denoiser_exe: Optional[str] = None, denoise_keep_original: Optional[bool] = None) -> None:
+                        denoiser_exe: Optional[str] = None, denoise_keep_original: Optional[bool] = None,
+                        anim_split: Optional[bool] = None) -> None:
         with self.lock:
+            if anim_split is not None and bool(anim_split) != self.cfg.anim_split:
+                self.cfg.anim_split = bool(anim_split)
+                self.status.log("animations: " + ("frames split across free workers" if self.cfg.anim_split else "one worker per animation"))
             if denoise_keep_original is not None and bool(denoise_keep_original) != self.cfg.denoise_keep_original:
                 self.cfg.denoise_keep_original = bool(denoise_keep_original)
                 self.status.log("denoise: " + ("keep original, write _denoised copy" if self.cfg.denoise_keep_original else "replace the render in place"))
@@ -696,6 +700,7 @@ class Manager:
                 "maxAttempts": self.cfg.max_attempts, "imageSize": list(self.cfg.image_size) if self.cfg.image_size else None,
                 "shutdownAfterQueue": self.cfg.shutdown_after_queue, "workDir": self.cfg.work_dir,
                 "webPort": self.cfg.web_port, "mode": self.cfg.mode, "notifications": dict(self.cfg.notifications),
+                "animSplit": self.cfg.anim_split,
                 "denoiserExe": self.cfg.denoiser_exe, "denoiserValid": _denoiser_valid(self.cfg.denoiser_exe),
                 "denoiseKeepOriginal": self.cfg.denoise_keep_original,
                 "denoiserInstall": dict(self._denoiser_install) if self._denoiser_install else None,
