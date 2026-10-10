@@ -168,6 +168,10 @@
         <legend>Workers <span class="hint">one DAZ instance each; pin to a CUDA device or use all</span></legend>
         <div id="sWorkers"></div>
         <button type="button" id="sAddWorker">+ worker</button>
+        <div class="mode">
+          <label class="check"><input type="radio" name="sMode" value="parallel"> One scene per worker <span class="hint">each enabled worker renders its own scene</span></label>
+          <label class="check"><input type="radio" name="sMode" value="combined"> One scene at a time <span class="hint">all enabled workers' GPUs render the same scene in one DAZ instance</span></label>
+        </div>
       </fieldset>
       <div class="grid2">
         <label>Job timeout (s)<input id="sTimeout" type="number" min="60"></label>

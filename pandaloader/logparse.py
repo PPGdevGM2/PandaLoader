@@ -42,7 +42,16 @@ _RE_SCRIPT_LOAD = re.compile(r"Loading script: (.+)$")
 _RE_SCRIPT_OK = re.compile(r"Script executed successfully")
 _RE_ASSET_LOAD = re.compile(r"Begin asset load \(open\): (.+)$")
 _RE_RENDER_START = re.compile(r"Rendering image\.\.\.")
-_RE_ITER = re.compile(r"Received update to ([0-9.]+) iterations? after ([0-9.]+) s")
+# Iray prints "after 53.451 s." below a minute, then "after 01:26.348." and "after 1:02:03.456."
+_RE_ITER = re.compile(r"Received update to ([0-9.]+) iterations? after ([0-9:]+(?:\.[0-9]+)?)")
+
+
+def parse_iray_duration(text: str) -> float:
+    """'53.451' -> 53.451, '01:26.348' -> 86.348, '1:02:03.4' -> 3723.4"""
+    total = 0.0
+    for part in text.strip().split(":"):
+        total = total * 60 + float(part)
+    return total
 _RE_CONVERGED = re.compile(r"Convergence threshold reached")
 _RE_DEVSTATS = re.compile(r"Device statistics at rendering done")
 _RE_DEVLINE = re.compile(r"rend info :\s+(CUDA device \d+ \([^)]*\)|CPU)\s*:\s+([0-9.]+) spp")
@@ -57,7 +66,21 @@ _RE_FATAL = re.compile(
 
 
 _RE_ERR_TAIL = re.compile(r"rend (?:error|warn)\s*:\s*(.+)$")
-_RE_STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+_RE_STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?")
+
+
+def _line_time(line: str) -> Optional[float]:
+    """Epoch seconds of a log line's leading local timestamp, or None."""
+    m = _RE_STAMP.match(line)
+    if not m:
+        return None
+    try:
+        t = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return None
+    if m.group(2):
+        t += int(m.group(2).ljust(3, "0")) / 1000.0
+    return t
 
 
 def session_start_time(line: str) -> Optional[float]:
@@ -105,6 +128,9 @@ class Progress:
     t_render_start: Optional[float] = None
     t_finished: Optional[float] = None
     t_last_line: Optional[float] = None
+    # the same transitions by the log's own timestamps (exact, independent of polling)
+    log_t_render_start: Optional[float] = None
+    log_t_finished: Optional[float] = None
     lines: int = 0
 
     @property
@@ -113,7 +139,13 @@ class Progress:
 
     @property
     def render_secs(self) -> Optional[float]:
-        """Best available render duration: DAZ total, else Iray's last update time, else wall clock."""
+        """Render duration as the plugin measured it: from 'Rendering image...' to 'Finished rendering.'
+
+        Taken from the log's own timestamps (includes Iray scene translation and the
+        image save). Falls back to DAZ's total, Iray's last update time, then wall clock.
+        """
+        if self.log_t_render_start and self.log_t_finished and self.log_t_finished >= self.log_t_render_start:
+            return self.log_t_finished - self.log_t_render_start
         if self.total_render_time:
             return self.total_render_time
         if self.render_elapsed:
@@ -157,7 +189,10 @@ class LogParser:
         m = _RE_ITER.search(line)
         if m:
             p.iterations = float(m.group(1))
-            p.render_elapsed = float(m.group(2))
+            try:
+                p.render_elapsed = parse_iray_duration(m.group(2))
+            except ValueError:
+                pass
             if p.phase in (PHASE_STARTING, PHASE_LOADING):
                 p.phase = PHASE_RENDERING
                 p.t_render_start = p.t_render_start or now
@@ -165,6 +200,7 @@ class LogParser:
         if _RE_RENDER_START.search(line):
             p.phase = PHASE_RENDERING
             p.t_render_start = now
+            p.log_t_render_start = _line_time(line)
             return "render_start"
         if _RE_CONVERGED.search(line):
             p.converged = True
@@ -181,6 +217,7 @@ class LogParser:
         if _RE_FINISHED.search(line):
             p.finished = True
             p.t_finished = now
+            p.log_t_finished = _line_time(line)
             p.phase = PHASE_FINISHED
             return "finished"
         m = _RE_TOTAL_TIME.search(line)

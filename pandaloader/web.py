@@ -163,7 +163,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     workers=body.get("workers"), shutdown_after_queue=body.get("shutdownAfterQueue"),
                     job_timeout_s=body.get("jobTimeoutS"), stall_timeout_s=body.get("stallTimeoutS"),
                     max_attempts=body.get("maxAttempts"), image_size=body.get("imageSize"), daz_exe=body.get("dazExe"),
-                    web_port=body.get("webPort"),
+                    web_port=body.get("webPort"), mode=body.get("mode"),
                 )
             else:
                 return self._error("not found", 404)

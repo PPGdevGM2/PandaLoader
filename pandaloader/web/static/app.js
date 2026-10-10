@@ -325,11 +325,13 @@ $("addForm").onsubmit = async (e) => {
 function workerRowHtml(w, gpus) {
   const opts = [`<option value="all" ${w.gpu == null ? "selected" : ""}>all GPUs</option>`]
     .concat(gpus.map((g) => `<option value="${g.index}" ${w.gpu === g.index ? "selected" : ""}>GPU ${g.index}: ${esc(g.name)}</option>`));
-  return `<div class="worker-row"><input type="text" class="wname" value="${esc(w.name)}" placeholder="instance name"><select class="wgpu">${opts.join("")}</select><button type="button" class="wdel" title="Remove">✕</button></div>`;
+  const on = w.enabled !== false;
+  return `<div class="worker-row"><label class="wtoggle" title="Enabled: takes part in runs"><input type="checkbox" class="wenabled" ${on ? "checked" : ""}></label><input type="text" class="wname" value="${esc(w.name)}" placeholder="instance name"><select class="wgpu">${opts.join("")}</select><button type="button" class="wdel" title="Remove">✕</button></div>`;
 }
 $("btnSettings").onclick = () => {
   const c = state.config;
   $("sWorkers").innerHTML = c.workers.map((w) => workerRowHtml(w, state.gpus)).join("");
+  document.querySelectorAll("input[name=sMode]").forEach((r) => (r.checked = r.value === (c.mode || "parallel")));
   $("sTimeout").value = c.jobTimeoutS; $("sStall").value = c.stallTimeoutS; $("sAttempts").value = c.maxAttempts;
   $("sSize").value = c.imageSize ? c.imageSize.join("x") : ""; $("sDaz").value = c.dazExe; $("sPort").value = c.webPort;
   $("sInfo").textContent = `Work dir: ${c.workDir}` + (state.running ? " · workers can be changed when not rendering" : "");
@@ -342,11 +344,12 @@ $("sAddWorker").onclick = () => {
 $("sWorkers").addEventListener("click", (e) => { if (e.target.classList.contains("wdel")) e.target.closest(".worker-row").remove(); });
 $("settingsForm").onsubmit = async (e) => {
   e.preventDefault();
-  const workers = [...$("sWorkers").querySelectorAll(".worker-row")].map((r) => ({ name: r.querySelector(".wname").value.trim(), gpu: r.querySelector(".wgpu").value }));
+  const workers = [...$("sWorkers").querySelectorAll(".worker-row")].map((r) => ({ name: r.querySelector(".wname").value.trim(), gpu: r.querySelector(".wgpu").value, enabled: r.querySelector(".wenabled").checked }));
+  const modeEl = document.querySelector("input[name=sMode]:checked");
   const size = $("sSize").value.trim();
   const body = { jobTimeoutS: Number($("sTimeout").value), stallTimeoutS: Number($("sStall").value), maxAttempts: Number($("sAttempts").value),
     imageSize: size ? size.toLowerCase().split("x").map(Number) : [], dazExe: $("sDaz").value.trim(), webPort: Number($("sPort").value) };
-  if (!state.running) body.workers = workers;
+  if (!state.running) { body.workers = workers; if (modeEl) body.mode = modeEl.value; }
   const newPort = body.webPort !== state.config.webPort ? body.webPort : null;
   const d = await act("/api/settings", body, "settings saved");
   if (d) {

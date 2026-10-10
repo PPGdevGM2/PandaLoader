@@ -31,23 +31,69 @@ def localappdata() -> Path:
     return Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
 
 
+MODE_PARALLEL = "parallel"   # one scene per enabled worker
+MODE_COMBINED = "combined"   # one scene at a time, all enabled workers' GPUs in one DAZ instance
+MODES = (MODE_PARALLEL, MODE_COMBINED)
+
+
 @dataclass
 class WorkerSlot:
-    """One worker: a DAZ instance name and the CUDA device it is pinned to (None = all)."""
+    """One worker: a DAZ instance name and the CUDA device(s) it is pinned to.
+
+    ``gpu`` is an int for one card, a comma string such as "0,1" for several,
+    or None for every card. ``enabled`` is the user's toggle on the worker card.
+    """
     name: str
-    gpu: Optional[int] = None
+    gpu: Optional[object] = None
+    enabled: bool = True
 
     @classmethod
     def parse(cls, text: str) -> "WorkerSlot":
-        """Parse 'rqgpu0:0' or 'rqall' (no pin)."""
+        """Parse 'rqgpu0:0', 'rqboth:0,1' or 'rqall' (no pin)."""
         name, _, gpu = text.partition(":")
         name = name.strip()
         if not name:
             raise ValueError(f"empty worker name in {text!r}")
-        return cls(name, int(gpu) if gpu.strip() else None)
+        return cls(name, _parse_gpu(gpu))
+
+    @property
+    def gpu_text(self) -> str:
+        return "all" if self.gpu is None else str(self.gpu)
+
+    @property
+    def gpu_list(self) -> Optional[list]:
+        """CUDA indices as ints, or None for all."""
+        if self.gpu is None:
+            return None
+        return [int(x) for x in str(self.gpu).split(",") if str(x).strip() != ""]
 
     def to_dict(self) -> dict:
-        return {"name": self.name, "gpu": self.gpu}
+        return {"name": self.name, "gpu": self.gpu, "enabled": self.enabled}
+
+
+def _parse_gpu(value) -> Optional[object]:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in ("", "all", "none"):
+        return None
+    parts = [int(p) for p in text.split(",") if p.strip() != ""]
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else ",".join(str(p) for p in parts)
+
+
+def combined_slot(workers: list, name: str = "rqall") -> WorkerSlot:
+    """One slot that uses every GPU of the enabled workers (None if any of them uses all)."""
+    gpus: list = []
+    for w in workers:
+        if not w.enabled:
+            continue
+        if w.gpu_list is None:
+            return WorkerSlot(name, None)
+        gpus.extend(w.gpu_list)
+    uniq = sorted(set(gpus))
+    return WorkerSlot(name, uniq[0] if len(uniq) == 1 else ",".join(str(g) for g in uniq) if uniq else None)
 
 
 @dataclass
@@ -55,6 +101,8 @@ class Config:
     daz_exe: str = DEFAULT_DAZ_EXE
     daz_args: list = field(default_factory=lambda: list(DEFAULT_DAZ_ARGS))
     workers: list = field(default_factory=lambda: [WorkerSlot("rqgpu0", 0), WorkerSlot("rqgpu1", 1)])
+    mode: str = MODE_PARALLEL          # parallel: one scene per worker; combined: one scene at a time
+    combined_name: str = "rqall"       # instance name used in combined mode
     # Where a named instance writes its log.txt. {instance} is substituted.
     instance_dir_pattern: str = field(default_factory=lambda: str(appdata() / "DAZ 3D" / "Studio6 [{instance}]"))
     # Job scripts, result files and the manager's own log go here.
@@ -81,6 +129,18 @@ class Config:
     def jobs_dir(self) -> Path:
         return Path(self.work_dir) / "jobs"
 
+    def enabled_workers(self) -> list:
+        return [w for w in self.workers if w.enabled]
+
+    def run_slots(self) -> list:
+        """The slots a run actually uses, according to the scheduling mode."""
+        enabled = self.enabled_workers()
+        if not enabled:
+            return []
+        if self.mode == MODE_COMBINED:
+            return [combined_slot(enabled, self.combined_name)]
+        return enabled
+
     # -- (de)serialisation --------------------------------------------------
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -91,8 +151,15 @@ class Config:
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
         d = dict(d)
-        workers = [WorkerSlot(**w) if isinstance(w, dict) else WorkerSlot.parse(w) for w in d.get("workers", [])]
-        d["workers"] = workers or cls().workers
+        workers = []
+        for w in d.get("workers", []):
+            if isinstance(w, dict):
+                workers.append(WorkerSlot(str(w.get("name", "")), _parse_gpu(w.get("gpu")), bool(w.get("enabled", True))))
+            else:
+                workers.append(WorkerSlot.parse(w))
+        d["workers"] = [w for w in workers if w.name] or cls().workers
+        if d.get("mode") not in MODES:
+            d["mode"] = MODE_PARALLEL
         if d.get("image_size"):
             d["image_size"] = tuple(int(x) for x in d["image_size"])
         known = set(cls.__dataclass_fields__)

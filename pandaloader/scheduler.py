@@ -41,7 +41,8 @@ class Scheduler:
         self._stop = threading.Event()
         self._pause = threading.Event()
         self._finished_once = False
-        for slot in cfg.workers:
+        self.slots = cfg.run_slots()  # enabled workers, or one combined slot
+        for slot in self.slots:
             status.add_worker(slot.name, slot.gpu)
         status.shutdown_after_queue = cfg.shutdown_after_queue
         self._publish_queue()
@@ -53,13 +54,14 @@ class Scheduler:
             if n:
                 self.queue.append_log(f"PandaLoader: reset {n} scene(s) left in state 3")
                 self.queue.save()
-            self.queue.append_log(f"PandaLoader: launched with {len(self.cfg.workers)} worker(s): "
-                                  + ", ".join(f"{w.name}(gpu {w.gpu if w.gpu is not None else 'all'})" for w in self.cfg.workers))
+            mode = "one scene at a time" if self.cfg.mode == "combined" else "one scene per worker"
+            self.queue.append_log(f"PandaLoader: launched ({mode}) with {len(self.slots)} worker(s): "
+                                  + ", ".join(f"{w.name}(gpu {w.gpu_text})" for w in self.slots))
             self.queue.save()
         self.status.running = True
         self.status.started_at = time.time()
         self.status.log(f"queue {self.queue.path}: {self.queue.counts()}")
-        for slot in self.cfg.workers:
+        for slot in self.slots:
             t = threading.Thread(target=self._slot_loop, args=(slot,), name=f"slot-{slot.name}", daemon=True)
             self._threads[slot.name] = t
             t.start()

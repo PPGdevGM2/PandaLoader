@@ -80,10 +80,11 @@ class WorkerRun:
 
     def environment(self) -> dict:
         env = dict(os.environ)
-        if self.slot.gpu is None:
+        gpus = self.slot.gpu_list
+        if gpus is None:
             env.pop("CUDA_VISIBLE_DEVICES", None)
         else:
-            env["CUDA_VISIBLE_DEVICES"] = str(self.slot.gpu)
+            env["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in gpus)
         env["PANDALOADER_INSTANCE"] = self.slot.name
         return env
 

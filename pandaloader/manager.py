@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from . import dufinfo
-from .config import Config, WorkerSlot
+from .config import MODES, MODE_COMBINED, Config, WorkerSlot, _parse_gpu
 from .queuefile import QueueFile, Scene, STATE_DONE, STATE_RUNNING
 from .scheduler import Scheduler
 from .state import Status
@@ -44,7 +44,7 @@ class Manager:
         self._mtime_cache: dict = {}
         self.on_port_change: Optional[Callable[[int], None]] = None  # set by the host (tray/serve) to rebind
         self._load_state()
-        for slot in cfg.workers:
+        for slot in cfg.run_slots():
             self.status.add_worker(slot.name, slot.gpu)
         self.status.shutdown_after_queue = cfg.shutdown_after_queue
         self.status.log("PandaLoader started")
@@ -135,7 +135,7 @@ class Manager:
         st.listeners = list(self.status.listeners)
         for ev in list(self.status.events)[-50:]:
             st.events.append(ev)
-        for slot in self.cfg.workers:
+        for slot in self.cfg.run_slots():
             st.add_worker(slot.name, slot.gpu)
         st.shutdown_after_queue = self.cfg.shutdown_after_queue
         return st
@@ -157,6 +157,8 @@ class Manager:
                 raise ManagerError(f"DAZ executable not found: {self.cfg.daz_exe}")
             if q.counts()["pending"] == 0 and q.counts()["running"] == 0:
                 raise ManagerError("nothing pending; reset scenes first")
+            if not self.cfg.run_slots():
+                raise ManagerError("no worker is enabled; enable one in Settings")
             self.status = self._fresh_status()
             self.scheduler = Scheduler(self.cfg, q, self.status, on_queue_finished=self._on_finished)
             self.scheduler.start()
@@ -316,8 +318,18 @@ class Manager:
     def update_settings(self, workers: Optional[List[dict]] = None, shutdown_after_queue: Optional[bool] = None,
                         job_timeout_s: Optional[float] = None, stall_timeout_s: Optional[float] = None,
                         max_attempts: Optional[int] = None, image_size: Optional[list] = None,
-                        daz_exe: Optional[str] = None, web_port: Optional[int] = None) -> None:
+                        daz_exe: Optional[str] = None, web_port: Optional[int] = None,
+                        mode: Optional[str] = None) -> None:
         with self.lock:
+            if mode is not None and mode != self.cfg.mode:
+                if self.running:
+                    raise ManagerError("cannot change the scheduling mode while rendering")
+                if mode not in MODES:
+                    raise ManagerError(f"unknown mode {mode!r}")
+                self.cfg.mode = mode
+                self.status.log("scheduling mode: " + ("one scene at a time" if mode == MODE_COMBINED else "one scene per worker"))
+                self.status = self._fresh_status()
+                self._publish()
             if web_port is not None and int(web_port) != self.cfg.web_port:
                 port = int(web_port)
                 if not 1024 <= port <= 65535:
@@ -335,12 +347,14 @@ class Manager:
                     if not name or any(ch in name for ch in ' \\/:*?"<>|[]'):
                         raise ManagerError(f"bad worker name: {name!r}")
                     gpu = w.get("gpu")
-                    slots.append(WorkerSlot(name, None if gpu in (None, "", "all") else int(gpu)))
+                    slots.append(WorkerSlot(name, _parse_gpu(gpu), bool(w.get("enabled", True))))
                 if not slots:
                     raise ManagerError("at least one worker is needed")
+                if len({w.name for w in slots}) != len(slots):
+                    raise ManagerError("worker names must be unique")
                 if [w.to_dict() for w in slots] != [w.to_dict() for w in self.cfg.workers]:
                     self.status.log("workers set to " + ", ".join(
-                        f"{w.name}({'gpu ' + str(w.gpu) if w.gpu is not None else 'all'})" for w in slots))
+                        f"{w.name}(gpu {w.gpu_text}{'' if w.enabled else ', disabled'})" for w in slots))
                 self.cfg.workers = slots
                 self.status = self._fresh_status()
                 self._publish()
@@ -482,7 +496,8 @@ class Manager:
                 "jobTimeoutS": self.cfg.job_timeout_s, "stallTimeoutS": self.cfg.stall_timeout_s,
                 "maxAttempts": self.cfg.max_attempts, "imageSize": list(self.cfg.image_size) if self.cfg.image_size else None,
                 "shutdownAfterQueue": self.cfg.shutdown_after_queue, "workDir": self.cfg.work_dir,
-                "webPort": self.cfg.web_port,
+                "webPort": self.cfg.web_port, "mode": self.cfg.mode,
+                "runSlots": [w.to_dict() for w in self.cfg.run_slots()],
             }
             snap["gpus"] = _gpus()
             return snap

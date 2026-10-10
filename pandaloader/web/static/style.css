@@ -130,7 +130,10 @@ table.scenes tr:hover td.actions button, table.scenes tr.selected td.actions but
 .form legend { padding: 0 6px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 .worker-row { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
-.worker-row input { width: 140px; }
+.worker-row input.wname { width: 140px; }
+.worker-row .wtoggle { display: flex; align-items: center; margin: 0; }
+.form .mode { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.form .mode label { margin: 4px 0; }
 
 /* log */
 .log { padding: 8px 16px 12px; }
