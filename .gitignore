@@ -1,4 +1,5 @@
 /reference
+.claude/
 
 .venv/
 __pycache__/
