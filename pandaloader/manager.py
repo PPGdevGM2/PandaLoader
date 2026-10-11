@@ -75,6 +75,7 @@ class Manager:
             self.status.set_queue(Path(path).as_posix(), self.queue.counts(), self.queue.average_secs())
             self.status.log(f"reopened {Path(path).name}: {self.queue.counts()}")
             log.info("reopened last queue %s", path)
+            self._warn_moved_files()
             return True
         except (OSError, ValueError) as e:
             log.warning("could not reopen last queue %s: %s", path, e)
@@ -131,6 +132,15 @@ class Manager:
             self._publish()
             self._remember(str(p))
             self.status.log(f"opened {p.name}: {self.queue.counts()}")
+            self._warn_moved_files()
+
+    def _warn_moved_files(self) -> None:
+        """Scenes still to render whose .duf is no longer at the recorded path. Done scenes
+        with a moved file are normal (the user files them away) and are not mentioned."""
+        gone = [s.name for s in self.queue.scenes if not s.is_done and s.file and not Path(s.file).is_file()]
+        if gone:
+            self.status.log(f"{len(gone)} scene(s) to render whose .duf is not at the recorded path: "
+                            + ", ".join(gone[:5]) + ("…" if len(gone) > 5 else ""), level="warning")
 
     def new_queue(self, path: str) -> None:
         with self.lock:
@@ -737,6 +747,7 @@ class Manager:
 
 def _parse_size(value) -> Optional[tuple]:
     """[w, h] / (w, h) -> (w, h) of positive ints; anything else -> None."""
+                    d["fileExists"] = d["mtime"] is not None  # .duf moved away after rendering is normal
     try:
         if value and len(value) == 2 and int(value[0]) > 0 and int(value[1]) > 0:
             return int(value[0]), int(value[1])

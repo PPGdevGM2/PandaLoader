@@ -225,7 +225,7 @@ function sceneRow(sc, find) {
     <td class="sel"><input type="checkbox" class="selbox" ${inSel ? "checked" : ""}></td>
     <td class="num">${sc.index + 1}</td>
     <td class="state"><span class="badge ${sc.stateName}">${esc(stateTxt)}</span></td>
-    <td>${esc(sc.name)}.duf</td>
+    <td>${esc(sc.name)}.duf${sc.fileExists || sc.stateName === "done" ? "" : ` <span class="moved warn" title="${esc(sc.file)}">file missing</span>`}</td>
     <td class="hint">${fmtDate(sc.mtime)}</td>
     <td>${cam}</td>
     <td>${last}</td>
@@ -244,7 +244,7 @@ function renderDetails(sc, full) {
   const d = $("details");
   d.hidden = false;
   $("dTitle").textContent = sc.name;
-  $("dFile").textContent = sc.file;
+  $("dFile").textContent = sc.file + (sc.fileExists || sc.stateName === "done" ? "" : "  (NOT FOUND: the render will fail until the file is back or the entry is removed)");
   $("dState").innerHTML = `<span class="badge ${sc.stateName}">${sc.stateName}</span>`
     + (sc.anim ? ` animation ${sc.framesDone}/${sc.framesTotal} frames` : "") + (sc.lastSecs ? ` · last render ${hms(sc.lastSecs)}${sc.anim ? "/frame" : ""}` : "");
   $("dError").textContent = sc.lastError || "";

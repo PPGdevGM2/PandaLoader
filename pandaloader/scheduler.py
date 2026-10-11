@@ -254,6 +254,10 @@ class Scheduler:
         if self.target_dir is not None:
             target = (self.target_dir / Path(scene.target).name).as_posix()
         stamp = time.strftime("%Y%m%d-%H%M%S")
+        except FileNotFoundError as e:
+            self._attempts[scene.index] = self.cfg.max_attempts  # retrying cannot bring the file back
+            self._finish(slot, scene, None, str(e), block=block)
+            return
         base = self.cfg.jobs_dir() / f"{slot.name}_{scene.name}_{stamp}"
         frames = list(block) if block else []
         frame_targets = []
