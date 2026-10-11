@@ -199,8 +199,10 @@ class Scheduler:
 
     # -- denoise-only jobs: done scenes whose flag was set after the render ----------
     def _claim_denoise(self, slot: WorkerSlot) -> Optional[Scene]:
+        """Done scenes with post-render work still waiting: a denoise flag set after the
+        render, or "Action when done" entries added later."""
         with self.qlock:
-            scene = self.queue.next_denoise(exclude=self._denoise_claimed)
+            scene = self.queue.next_post(exclude=self._denoise_claimed)
             if scene is None:
                 return None
             self._denoise_claimed.add(scene.index)
@@ -211,13 +213,33 @@ class Scheduler:
         st.update_worker(slot.name, state="denoising", scene_index=scene.index, scene_name=scene.name,
                          target=scene.target, job_started=time.time(), render_started=None, iterations=0.0,
                          expected_secs=0.0, last_error="")
-        ok, msg = self._denoise_files(slot, scene, scene.output_files())
+        if scene.needs_denoise:
+            ok, msg = self._denoise_files(slot, scene, scene.output_files())
+            with self.qlock:
+                scene.mark_denoised(ok)
+                self.queue.append_log(f"{slot.name}: {'denoised' if ok else 'DENOISE FAILED'} {scene.name} (existing render): {msg}")
+                st.log(f"{scene.name}: {msg}", level="info" if ok else "warning", worker=slot.name)
         with self.qlock:
-            scene.mark_denoised(ok)
-            self.queue.append_log(f"{slot.name}: {'denoised' if ok else 'DENOISE FAILED'} {scene.name} (existing render): {msg}")
-            st.log(f"{scene.name}: {msg}", level="info" if ok else "warning", worker=slot.name)
-            self._save("after denoise")
+            self._run_actions(slot, scene)
+            self._save("after post-render work")
         st.worker_idle(slot.name)
+
+    def _run_actions(self, slot: WorkerSlot, scene: Scene) -> None:
+        """Run the scene's pending "Action when done" entries, in the order selected.
+        Called under the queue lock once the scene is done (and denoised)."""
+        from .actions import run_action
+        stock = {a["id"]: a for a in self.cfg.actions}
+        for aid in scene.pending_actions():
+            action = stock.get(aid)
+            if action is None:
+                ok, msg = False, "action no longer exists in Settings > Actions"
+                label = aid
+            else:
+                label = action.get("label") or aid
+                ok, msg = run_action(action, scene)
+            scene.mark_action(aid, ok)
+            self.queue.append_log(f"{slot.name}: {'action' if ok else 'ACTION FAILED'} '{label}' for {scene.name}: {msg}")
+            self.status.log(f"{scene.name}: {label}: {msg}", level="info" if ok else "warning", worker=slot.name)
 
     def _run_one(self, slot: WorkerSlot, scene: Scene, block: Optional[List[int]] = None) -> None:
         st = self.status
@@ -232,6 +254,10 @@ class Scheduler:
         st.log(f"job {scene.index + 1}: {scene.name} ({what})", worker=slot.name)
         try:
             spec, job_path = self._prepare(slot, scene, block)
+        except FileNotFoundError as e:
+            self._attempts[scene.index] = self.cfg.max_attempts  # retrying cannot bring the file back
+            self._finish(slot, scene, None, str(e), block=block)
+            return
         except Exception as e:
             self._finish(slot, scene, None, f"prepare failed: {e}", block=block)
             return
@@ -254,10 +280,6 @@ class Scheduler:
         if self.target_dir is not None:
             target = (self.target_dir / Path(scene.target).name).as_posix()
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        except FileNotFoundError as e:
-            self._attempts[scene.index] = self.cfg.max_attempts  # retrying cannot bring the file back
-            self._finish(slot, scene, None, str(e), block=block)
-            return
         base = self.cfg.jobs_dir() / f"{slot.name}_{scene.name}_{stamp}"
         frames = list(block) if block else []
         frame_targets = []
@@ -343,6 +365,7 @@ class Scheduler:
                     scene.mark_denoised(ok)
                     self.queue.append_log(f"{slot.name}: {'denoised' if ok else 'DENOISE FAILED'} {scene.name}: {msg}")
                     st.log(f"{scene.name}: {msg}", level="info" if ok else "warning", worker=slot.name)
+                self._run_actions(slot, scene)
             elif self._stop.is_set() or (result is not None and result.killed and "stopped" in result.reason):
                 scene.mark_pending()
                 self.queue.append_log(f"{slot.name}: stopped during {scene.name}; back to pending")
@@ -402,6 +425,7 @@ class Scheduler:
                     scene.mark_denoised(scene.index not in self._anim_denoise_fail)
                 self.queue.append_log(f"{slot.name}: done {scene.name}: all {len(scene.frames)} frames -> {Path(scene.target).parent}")
                 st.log(f"done {scene.name}: all {len(scene.frames)} frames", worker=slot.name)
+                self._run_actions(slot, scene)
             elif failed:
                 stopped = self._stop.is_set() or (result is not None and result.killed and "stopped" in result.reason)
                 if stopped:

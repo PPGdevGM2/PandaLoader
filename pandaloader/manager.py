@@ -195,7 +195,9 @@ class Manager:
             c = q.counts()
             if c["pending"] == 0 and c["running"] == 0 and c["toDenoise"] == 0:
                 raise ManagerError("nothing pending and nothing to denoise; reset scenes first")
-            if c["pending"] == 0 and c["running"] == 0 and not _denoiser_valid(self.cfg.denoiser_exe):
+            q = self._require_queue()
+            only_denoise = c["pending"] == 0 and c["running"] == 0 and not any(s.pending_actions() for s in q.scenes)
+            if only_denoise and not _denoiser_valid(self.cfg.denoiser_exe):
                 raise ManagerError("only denoise jobs are waiting, but no valid denoiser path is set in Settings")
             if not self.cfg.run_slots():
                 raise ManagerError("no worker is enabled; enable one in Settings")
@@ -286,10 +288,13 @@ class Manager:
 
     def add_scenes(self, files: List[str], target_dir: Optional[str] = None,
                    post_loaders: Optional[List[str]] = None, at_top: bool = False, denoise: bool = False,
-                   anim: Optional[dict] = None, image_size: Optional[list] = None) -> int:
+                   anim: Optional[dict] = None, image_size: Optional[list] = None,
+                   actions: Optional[list] = None) -> int:
         """anim: {"frameFirst": a, "frameLast": b} renders the (single) scene as an animation.
-        image_size: [w, h] overrides the preset's render size for every added scene."""
+        image_size: [w, h] overrides the preset's render size for every added scene.
+        actions: ids from the action stock to run when each scene is done."""
         size = _parse_size(image_size)
+        action_ids = self._check_action_ids(actions)
         anim_range = None
         if anim and len(files) == 1:
             a, b = int(anim.get("frameFirst", 0)), int(anim.get("frameLast", 0))
@@ -317,6 +322,8 @@ class Manager:
                     sc = q.add_scene(p.as_posix(), target, post_loaders, denoise=denoise)
                 if size:
                     sc.set_image_size(size)
+                if action_ids:
+                    sc.set_actions(action_ids)
                 new_entries.append(sc.data)
                 added += 1
             if at_top and new_entries:
@@ -444,15 +451,18 @@ class Manager:
     def edit_scene(self, index: int, target: Optional[str] = None, post_loaders: Optional[List[str]] = None,
                    camera: Optional[str] = None, denoise: Optional[bool] = None, anim: Optional[bool] = None,
                    frame_first: Optional[int] = None, frame_last: Optional[int] = None,
-                   image_size: Optional[list] = "keep") -> None:
+                   image_size: Optional[list] = "keep", actions: Optional[list] = None) -> None:
         """camera: '' or None keeps 'camera saved with scene'; a label forces that camera.
-        image_size: [w, h] sets the per-scene render size, [] or None clears it, "keep" leaves it."""
+        image_size: [w, h] sets the per-scene render size, [] or None clears it, "keep" leaves it.
+        actions: list of action ids (None leaves them)."""
         with self.lock, self._qlock():
             sc = self._scene(index)
             if sc.state == STATE_RUNNING:
                 raise ManagerError("scene is rendering")
             if denoise is not None:
                 sc.denoise = bool(denoise)
+            if actions is not None:
+                sc.set_actions(self._check_action_ids(actions))
             if image_size != "keep":
                 sc.set_image_size(_parse_size(image_size))
             if anim is not None or frame_first is not None or frame_last is not None:
@@ -523,8 +533,17 @@ class Manager:
                         daz_exe: Optional[str] = None, web_port: Optional[int] = None,
                         mode: Optional[str] = None, notifications: Optional[dict] = None,
                         denoiser_exe: Optional[str] = None, denoise_keep_original: Optional[bool] = None,
-                        anim_split: Optional[bool] = None) -> None:
+                        anim_split: Optional[bool] = None, actions: Optional[list] = None) -> None:
         with self.lock:
+            if actions is not None:
+                from .actions import validate_actions
+                try:
+                    new = validate_actions(actions)
+                except ValueError as e:
+                    raise ManagerError(str(e))
+                if new != self.cfg.actions:
+                    self.cfg.actions = new
+                    self.status.log(f"action stock: {len(new)} action(s): " + ", ".join(a["label"] for a in new) if new else "action stock cleared")
             if anim_split is not None and bool(anim_split) != self.cfg.anim_split:
                 self.cfg.anim_split = bool(anim_split)
                 self.status.log("animations: " + ("frames split across free workers" if self.cfg.anim_split else "one worker per animation"))
@@ -657,6 +676,16 @@ class Manager:
                     return c
         return documents_dir()
 
+    def _check_action_ids(self, ids: Optional[list]) -> list:
+        """Only ids that exist in the stock, in the given order."""
+        if not ids:
+            return []
+        stock = {a["id"] for a in self.cfg.actions}
+        unknown = [str(a) for a in ids if str(a) not in stock]
+        if unknown:
+            raise ManagerError("unknown action(s): " + ", ".join(unknown))
+        return [str(a) for a in ids]
+
     def scene_animinfo(self, file: str) -> dict:
         """Timeline facts of a scene file (for the Add dialog), see dufinfo.anim_info."""
         p = Path(file)
@@ -718,6 +747,7 @@ class Manager:
                 for s in q.scenes:
                     d = s.to_dict()
                     d["mtime"] = self._file_mtime(s.file)
+                    d["fileExists"] = d["mtime"] is not None  # .duf moved away after rendering is normal
                     d["postLoaders"] = s.post_loaders
                     d["savedCamera"] = s.uses_saved_camera
                     d["worker"] = running_index.get(s.index)
@@ -735,7 +765,7 @@ class Manager:
                 "maxAttempts": self.cfg.max_attempts, "imageSize": list(self.cfg.image_size) if self.cfg.image_size else None,
                 "shutdownAfterQueue": self.cfg.shutdown_after_queue, "workDir": self.cfg.work_dir,
                 "webPort": self.cfg.web_port, "mode": self.cfg.mode, "notifications": dict(self.cfg.notifications),
-                "animSplit": self.cfg.anim_split,
+                "animSplit": self.cfg.anim_split, "actions": [dict(a) for a in self.cfg.actions],
                 "denoiserExe": self.cfg.denoiser_exe, "denoiserValid": _denoiser_valid(self.cfg.denoiser_exe),
                 "denoiseKeepOriginal": self.cfg.denoise_keep_original,
                 "denoiserInstall": dict(self._denoiser_install) if self._denoiser_install else None,
@@ -747,7 +777,6 @@ class Manager:
 
 def _parse_size(value) -> Optional[tuple]:
     """[w, h] / (w, h) -> (w, h) of positive ints; anything else -> None."""
-                    d["fileExists"] = d["mtime"] is not None  # .duf moved away after rendering is normal
     try:
         if value and len(value) == 2 and int(value[0]) > 0 and int(value[1]) > 0:
             return int(value[0]), int(value[1])

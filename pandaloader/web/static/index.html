@@ -120,9 +120,6 @@
         </span>
       </label>
       <div class="animbox">
-        <label class="check"><input type="checkbox" id="dDenoise"> Post-render denoise <span class="hint" id="dDenoiseHint"></span></label>
-      </div>
-      <div class="animbox">
         <label class="check"><input type="checkbox" id="dAnim"> Render animation <span class="hint" id="dAnimHint"></span></label>
         <div class="row frames" id="dFrameRow" hidden>
           <label>First frame<input id="dFrameFirst" type="number" min="0" step="1"></label>
@@ -135,6 +132,13 @@
         <div class="row frames" id="dSizeRow" hidden>
           <label>Width<input id="dWidth" type="number" min="1" step="1"></label>
           <label>Height<input id="dHeight" type="number" min="1" step="1"></label>
+        </div>
+      </div>
+      <div class="animbox">
+        <label class="check"><input type="checkbox" id="dWhenDone"> Action when done <span class="hint">denoise and/or actions from the stock</span></label>
+        <div id="dWhenDoneBody" class="boxbody" hidden>
+          <label class="check"><input type="checkbox" id="dDenoise"> Post-render denoise <span class="hint" id="dDenoiseHint"></span></label>
+          <div id="dActions" class="actionlist"></div>
         </div>
       </div>
       <div class="row buttons">
@@ -188,9 +192,6 @@
         <span class="row"><textarea id="aFiles" rows="5" class="mono grow" placeholder="one .duf per line&#10;add a single .duf for animation detection"></textarea>
         <button type="button" id="aBrowse">Browse…</button></span>
       </label>
-      <div class="animbox">
-        <label class="check"><input type="checkbox" id="aDenoise"> Post-render denoise <span class="hint" id="aDenoiseHint"></span></label>
-      </div>
       <div class="animbox" id="aAnimBox" hidden>
         <label class="check"><input type="checkbox" id="aAnim"> Render animation <span class="hint" id="aAnimHint"></span></label>
         <div class="row frames" id="aFrameRow" hidden>
@@ -204,6 +205,13 @@
         <div class="row frames" id="aSizeRow" hidden>
           <label>Width<input id="aWidth" type="number" min="1" step="1" placeholder="1920"></label>
           <label>Height<input id="aHeight" type="number" min="1" step="1" placeholder="1080"></label>
+        </div>
+      </div>
+      <div class="animbox">
+        <label class="check"><input type="checkbox" id="aWhenDone"> Action when done <span class="hint">denoise and/or actions from the stock</span></label>
+        <div id="aWhenDoneBody" class="boxbody" hidden>
+          <label class="check"><input type="checkbox" id="aDenoise"> Post-render denoise <span class="hint" id="aDenoiseHint"></span></label>
+          <div id="aActions" class="actionlist"></div>
         </div>
       </div>
       <label>Target folder (PNG named after the scene)
@@ -227,6 +235,7 @@
         <button type="button" class="tab active" data-stab="general">General</button>
         <button type="button" class="tab" data-stab="denoiser">Denoiser</button>
         <button type="button" class="tab" data-stab="notes">Notifications</button>
+        <button type="button" class="tab" data-stab="actions">Actions</button>
         <button type="button" class="tab" data-stab="setup">Setup</button>
       </div>
       <div class="stab" data-stab="general">
@@ -272,6 +281,12 @@
           <label class="check"><input type="checkbox" data-note="errors"> Tray action refused <span class="hint">e.g. Render with nothing pending</span></label>
         </div>
       </fieldset>
+      </div>
+      <div class="stab" data-stab="actions" hidden>
+        <p class="hint">Stock of "Action when done" entries. Tick them per scene in the Add dialog or the details panel;
+          each runs once after the render (and after the denoise). Actions added to an already finished scene run at the next Render.</p>
+        <div id="sActions"></div>
+        <button type="button" id="sAddAction">+ action</button>
       </div>
       <div class="stab setup" data-stab="setup" hidden>
         <p class="hint">First-run checklist for a fresh PC. Everything here is a one-time step.</p>

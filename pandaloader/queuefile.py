@@ -193,6 +193,46 @@ class Scene:
         as such and is retried only after the flag is switched off and on again."""
         return self.is_done and self.denoise and self.denoised is None and bool(self.target)
 
+    # -- "Action when done": ids into the config's action stock (PandaLoader addition) ----
+    @property
+    def actions(self) -> list:
+        return [str(a) for a in self.data.get("actions", []) if a]
+
+    def set_actions(self, ids) -> None:
+        """Replace the list; results of actions that are no longer selected are dropped,
+        results of the ones that stay are kept (an action runs once)."""
+        ids = [str(a) for a in (ids or []) if a]
+        done = {k: v for k, v in self.actions_done.items() if k in ids}
+        if ids:
+            self.data["actions"] = ids
+        else:
+            self.data.pop("actions", None)
+        if done:
+            self.data["actionsDone"] = done
+        else:
+            self.data.pop("actionsDone", None)
+
+    @property
+    def actions_done(self) -> dict:
+        """action id -> True (ran) / False (failed)."""
+        d = self.data.get("actionsDone")
+        return dict(d) if isinstance(d, dict) else {}
+
+    def mark_action(self, action_id: str, ok: bool) -> None:
+        d = self.actions_done
+        d[str(action_id)] = bool(ok)
+        self.data["actionsDone"] = d
+
+    def pending_actions(self) -> list:
+        """Selected actions that have not run yet (failed ones are not retried by themselves)."""
+        done = self.actions_done
+        return [a for a in self.actions if a not in done]
+
+    @property
+    def needs_post(self) -> bool:
+        """Done, and something after the render is still waiting: a denoise or an action."""
+        return self.is_done and (self.needs_denoise or bool(self.pending_actions()))
+
     def output_files(self) -> list:
         """The rendered file(s): one target, or one per frame of an animation."""
         return [self.frame_target(f) for f in self.frames] if self.anim else ([self.target] if self.target else [])
@@ -252,6 +292,7 @@ class Scene:
             "anim": self.anim, "frameFirst": self.frame_first, "frameLast": self.frame_last,
             "framesTotal": len(self.frames), "framesDone": len(self.frames_done),
             "imageSize": list(self.image_size) if self.image_size else None,
+            "actions": self.actions, "actionsDone": self.actions_done,
         }
 
 
@@ -339,6 +380,14 @@ class QueueFile:
                 return s
         return None
 
+    def next_post(self, exclude: Iterable[int] = ()) -> Optional[Scene]:
+        """Next done scene with post-render work waiting (denoise and/or actions)."""
+        skip = set(exclude)
+        for s in self.scenes:
+            if s.needs_post and s.index not in skip:
+                return s
+        return None
+
     def reset_running(self) -> int:
         """Scenes left in state 3 by a crash go back to pending. Returns how many."""
         n = 0
@@ -365,7 +414,7 @@ class QueueFile:
             if s.anim:
                 c["framesTotal"] += len(s.frames)
                 c["framesDone"] += len(s.frames_done)
-            if s.needs_denoise:
+            if s.needs_post:  # post-render work waiting: denoise or actions
                 c["toDenoise"] += 1
             if s.is_done:
                 c["done"] += 1

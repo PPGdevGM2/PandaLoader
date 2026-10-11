@@ -155,7 +155,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             elif route == "scenes/add":
                 n = m.add_scenes(body.get("files", []), body.get("targetDir"), body.get("postLoaders"),
                                  body.get("atTop", False), bool(body.get("denoise", False)), body.get("anim"),
-                                 body.get("imageSize"))
+                                 body.get("imageSize"), body.get("actions"))
                 return self._json({"added": n})
             elif route == "scenes/reorder":
                 return self._json({"indices": m.reorder(body.get("indices", []), int(body.get("to", 0)))})
@@ -176,7 +176,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 elif action == "edit":
                     m.edit_scene(i, body.get("target"), body.get("postLoaders"), body.get("camera"), body.get("denoise"),
                                  body.get("anim"), body.get("frameFirst"), body.get("frameLast"),
-                                 body.get("imageSize", "keep"))
+                                 body.get("imageSize", "keep"), body.get("actions"))
                 elif action == "denoise":
                     m.set_denoise(i, bool(body.get("on", True)))
                 else:
@@ -187,7 +187,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     job_timeout_s=body.get("jobTimeoutS"), stall_timeout_s=body.get("stallTimeoutS"),
                     max_attempts=body.get("maxAttempts"), image_size=body.get("imageSize"), daz_exe=body.get("dazExe"),
                     web_port=body.get("webPort"), mode=body.get("mode"), notifications=body.get("notifications"),
-                    anim_split=body.get("animSplit"),
+                    anim_split=body.get("animSplit"), actions=body.get("actions"),
                     denoiser_exe=body.get("denoiserExe"), denoise_keep_original=body.get("denoiseKeepOriginal"),
                 )
             else:

@@ -220,7 +220,14 @@ function sceneRow(sc, find) {
   const err = sc.lastError ? ` title="${esc(sc.lastError)}"` : "";
   const dnMark = sc.denoised === true ? `<span class="dnok" title="denoised">✓</span>` : sc.denoised === false ? `<span class="dnfail" title="denoise failed, see queue log">!</span>`
     : (sc.denoise && sc.stateName === "done") ? `<span class="dnwait" title="waiting: will be denoised by the next run">…</span>` : "";
-  const dn = `<input type="checkbox" class="dnbox" data-act="denoise" ${sc.denoise ? "checked" : ""} title="Post-render denoise${state.config.denoiserValid ? "" : " (no valid denoiser path in Settings: flag is skipped)"}">${dnMark}`;
+  let actBadge = "";
+  if (sc.actions && sc.actions.length) {
+    const byId = Object.fromEntries((state.config.actions || []).map((a) => [a.id, a.label]));
+    const done = sc.actionsDone || {}, failed = sc.actions.some((id) => done[id] === false), all = sc.actions.every((id) => done[id] === true);
+    const tip = sc.actions.map((id) => `${byId[id] || id}: ${done[id] === true ? "ran" : done[id] === false ? "FAILED" : "waiting"}`).join("\n");
+    actBadge = `<span class="actbadge ${failed ? "fail" : ""}" title="${esc(tip)}">+${sc.actions.length}${all ? "✓" : failed ? "!" : ""}</span>`;
+  }
+  const dn = `<input type="checkbox" class="dnbox" data-act="denoise" ${sc.denoise ? "checked" : ""} title="Post-render denoise${state.config.denoiserValid ? "" : " (no valid denoiser path in Settings: flag is skipped)"}">${dnMark}${actBadge}`;
   return `<tr class="${cls}" data-i="${sc.index}"${err} draggable="true">
     <td class="sel"><input type="checkbox" class="selbox" ${inSel ? "checked" : ""}></td>
     <td class="num">${sc.index + 1}</td>
@@ -261,6 +268,9 @@ function renderDetails(sc, full) {
     $("dTarget").value = sc.target || "";
     $("dAssets").value = sc.postLoaders.join("\n");
     $("dDenoise").checked = !!sc.denoise;
+    $("dActions")._done = sc.actionsDone || {}; $("dActions").innerHTML = actionListHtml(sc.actions || [], sc.actionsDone || {});
+    const whenDoneOn = !!sc.denoise || (sc.actions || []).length > 0;
+    $("dWhenDone").checked = whenDoneOn; $("dWhenDoneBody").hidden = !whenDoneOn;
     $("dDenoiseHint").textContent = state.config.denoiserValid ? (sc.denoised === true ? "last render was denoised" : sc.denoised === false ? "last denoise failed, see queue log" : "") : "no valid denoiser path in Settings";
     $("dSizeOn").checked = !!sc.imageSize; $("dSizeRow").hidden = !sc.imageSize;
     $("dWidth").value = sc.imageSize ? sc.imageSize[0] : ""; $("dHeight").value = sc.imageSize ? sc.imageSize[1] : "";
@@ -495,8 +505,8 @@ $("dForm").onsubmit = (e) => {
   e.preventDefault();
   let imageSize = null;
   try { imageSize = sizeFrom("dSizeOn", "dWidth", "dHeight"); } catch (e2) { toast(e2.message); return; }
-  act(`/api/scene/${selected}/edit`, { target: $("dTarget").value.trim(), postLoaders: $("dAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), camera: $("dCamera").value, denoise: $("dDenoise").checked,
-    anim: $("dAnim").checked, frameFirst: Number($("dFrameFirst").value), frameLast: Number($("dFrameLast").value), imageSize }, "scene saved");
+  act(`/api/scene/${selected}/edit`, { target: $("dTarget").value.trim(), postLoaders: $("dAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), camera: $("dCamera").value,
+    anim: $("dAnim").checked, frameFirst: Number($("dFrameFirst").value), frameLast: Number($("dFrameLast").value), imageSize, ...whenDone("d") }, "scene saved");
 };
 $("dAnim").onchange = () => { $("dFrameRow").hidden = !$("dAnim").checked; };
 $("dSizeOn").onchange = () => { $("dSizeRow").hidden = !$("dSizeOn").checked; };
@@ -520,7 +530,9 @@ $("btnAdd").onclick = () => {
   $("aFiles").value = "";
   $("aAnimBox").hidden = true; $("aAnim").checked = false; $("aFrameRow").hidden = true; animInfoFor = null;
   $("aSizeOn").checked = false; $("aSizeRow").hidden = true; $("aWidth").value = ""; $("aHeight").value = "";
-  $("aDenoise").checked = sc ? !!sc.denoise : false;
+  $("aDenoise").checked = false;
+  $("aActions")._done = {}; $("aActions").innerHTML = actionListHtml([], {});
+  $("aWhenDone").checked = false; $("aWhenDoneBody").hidden = true;
   $("aDenoiseHint").textContent = state.config.denoiserValid ? "" : "no valid denoiser path in Settings: the flag is kept but skipped";
   $("addDlg").hidden = false;
 };
@@ -575,7 +587,7 @@ $("addForm").onsubmit = async (e) => {
   const anim = files.length === 1 && !$("aAnimBox").hidden && $("aAnim").checked ? { frameFirst: Number($("aFrameFirst").value), frameLast: Number($("aFrameLast").value) } : null;
   let imageSize = null;
   try { imageSize = sizeFrom("aSizeOn", "aWidth", "aHeight"); } catch (e2) { toast(e2.message); return; }
-  const d = await act("/api/scenes/add", { files, targetDir: $("aTargetDir").value.trim() || null, postLoaders: $("aAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), atTop: $("aTop").checked, denoise: $("aDenoise").checked, anim, imageSize });
+  const d = await act("/api/scenes/add", { files, targetDir: $("aTargetDir").value.trim() || null, postLoaders: $("aAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), atTop: $("aTop").checked, anim, imageSize, ...whenDone("a") });
   if (d) { toast(`${d.added} scene(s) added`, true); $("addDlg").hidden = true; }
 };
 
@@ -593,6 +605,7 @@ $("btnSettings").onclick = () => {
   $("sWorkers").innerHTML = c.workers.map((w) => workerRowHtml(w, state.gpus)).join("");
   document.querySelectorAll("input[name=sMode]").forEach((r) => (r.checked = r.value === (c.mode || "parallel")));
   document.querySelectorAll("input[name=sAnim]").forEach((r) => (r.checked = r.value === (c.animSplit ? "split" : "whole")));
+  $("sActions").innerHTML = (c.actions || []).map(actionRowHtml).join("");
   document.querySelectorAll("input[data-note]").forEach((cb) => (cb.checked = (c.notifications || {})[cb.dataset.note] !== false));
   $("sTimeout").value = c.jobTimeoutS; $("sStall").value = c.stallTimeoutS; $("sAttempts").value = c.maxAttempts;
   $("sDaz").value = c.dazExe; $("sPort").value = c.webPort;
@@ -655,6 +668,63 @@ $("sAddWorker").onclick = () => {
   equalizeSettingsTabs();
 };
 $("sWorkers").addEventListener("click", (e) => { if (e.target.classList.contains("wdel")) { e.target.closest(".worker-row").remove(); equalizeSettingsTabs(); } });
+
+// ---------- action stock (Settings > Actions) and per-scene "Action when done" ----------
+const ACTION_TYPES = { move_scene: "Move the scene file to folder" };
+function actionRowHtml(a) {
+  const opts = Object.entries(ACTION_TYPES).map(([v, t]) => `<option value="${v}" ${a.type === v ? "selected" : ""}>${t}</option>`).join("");
+  return `<div class="action-row" data-id="${esc(a.id)}"><input type="text" class="alabel" value="${esc(a.label || "")}" placeholder="name (optional)">
+    <select class="atype">${opts}</select><input type="text" class="afolder mono" value="${esc((a.params || {}).folder || "")}" placeholder="folder: absolute, or .\\DONE = a DONE folder next to the scene's folder">
+    <button type="button" class="abrowse" title="Pick a folder">…</button><button type="button" class="adel" title="Remove from the stock">✕</button></div>`;
+}
+$("sAddAction").onclick = () => {
+  const id = Array.from(crypto.getRandomValues(new Uint8Array(4))).map((b) => b.toString(16).padStart(2, "0")).join("");
+  $("sActions").insertAdjacentHTML("beforeend", actionRowHtml({ id, type: "move_scene", label: "", params: { folder: "" } }));
+  equalizeSettingsTabs();
+};
+$("sActions").addEventListener("click", async (e) => {
+  const row = e.target.closest(".action-row"); if (!row) return;
+  if (e.target.classList.contains("adel")) { row.remove(); equalizeSettingsTabs(); }
+  else if (e.target.classList.contains("abrowse")) {
+    const d = await browser.open({ title: "Folder for the scene file", dirsOnly: true, start: row.querySelector(".afolder").value || null });
+    if (d) row.querySelector(".afolder").value = d;
+  }
+});
+// Per-scene selection: only the chosen actions are listed; a small dropdown adds one.
+function actionListHtml(ids, done) {
+  const stock = state.config.actions || [], byId = Object.fromEntries(stock.map((a) => [a.id, a]));
+  const rows = ids.map((id) => {
+    const a = byId[id], name = a ? a.label : `${id} (no longer in Settings > Actions)`;
+    const mark = done[id] === true ? `<span class="actok" title="ran">✓</span>` : done[id] === false ? `<span class="actfail" title="failed, see queue log">!</span>` : "";
+    return `<label class="check actsel" data-id="${esc(id)}"><button type="button" class="actdel" title="Remove">✕</button> ${esc(name)}${mark}</label>`;
+  }).join("");
+  const free = stock.filter((a) => !ids.includes(a.id));
+  const add = stock.length ? `<select class="actadd"><option value="">+ add action…</option>${free.map((a) => `<option value="${esc(a.id)}">${esc(a.label)}</option>`).join("")}</select>`
+    : `<span class="hint empty">no actions defined yet (Settings → Actions)</span>`;
+  return rows + add;
+}
+function actionIds(container) { return [...container.querySelectorAll(".actsel")].map((l) => l.dataset.id); }
+function wireActionList(container) {
+  container.addEventListener("change", (e) => {
+    if (!e.target.classList.contains("actadd") || !e.target.value) return;
+    const ids = actionIds(container).concat([e.target.value]);
+    container.innerHTML = actionListHtml(ids, container._done || {});
+  });
+  container.addEventListener("click", (e) => {
+    if (!e.target.classList.contains("actdel")) return;
+    e.preventDefault();
+    const ids = actionIds(container).filter((id) => id !== e.target.closest(".actsel").dataset.id);
+    container.innerHTML = actionListHtml(ids, container._done || {});
+  });
+}
+wireActionList($("aActions")); wireActionList($("dActions"));
+$("aWhenDone").onchange = () => { $("aWhenDoneBody").hidden = !$("aWhenDone").checked; };
+$("dWhenDone").onchange = () => { $("dWhenDoneBody").hidden = !$("dWhenDone").checked; };
+// an unticked "Action when done" means: no denoise, no actions
+function whenDone(prefix) {
+  const on = $(prefix + "WhenDone").checked;
+  return { denoise: on && $(prefix + "Denoise").checked, actions: on ? actionIds($(prefix + "Actions")) : [] };
+}
 $("settingsForm").onsubmit = async (e) => {
   e.preventDefault();
   const workers = [...$("sWorkers").querySelectorAll(".worker-row")].map((r) => ({ name: r.querySelector(".wname").value.trim(), gpu: r.querySelector(".wgpu").value, enabled: r.querySelector(".wenabled").checked }));
@@ -666,6 +736,9 @@ $("settingsForm").onsubmit = async (e) => {
   if (!state.running) { body.workers = workers; if (modeEl) body.mode = modeEl.value; }
   const animEl = document.querySelector("input[name=sAnim]:checked");
   if (animEl) body.animSplit = animEl.value === "split";
+  body.actions = [...$("sActions").querySelectorAll(".action-row")].map((r) => ({
+    id: r.dataset.id, type: r.querySelector(".atype").value, label: r.querySelector(".alabel").value.trim(),
+    params: { folder: r.querySelector(".afolder").value.trim() } }));
   const newPort = body.webPort !== state.config.webPort ? body.webPort : null;
   const d = await act("/api/settings", body, "settings saved");
   if (d) {

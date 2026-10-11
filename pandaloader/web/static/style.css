@@ -235,6 +235,19 @@ table.scenes td.dn input { vertical-align: middle; cursor: pointer; }
 .toast.ok { background: #27402b; border-color: var(--ok); }
 
 .moved { color: var(--warn); font-size: 11px; margin-left: 6px; }
+
+/* action when done */
+.boxbody { margin: 4px 0 0 22px; }
+.actionlist label.check { margin: 3px 0; }
+.actionlist .hint.empty { display: block; margin: 2px 0; }
+.action-row { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+.action-row input.alabel { width: 160px; }
+.action-row input.afolder { flex: 1; }
+.actok { color: var(--ok, #7fd97f); margin-left: 4px; }
+.actfail { color: var(--err); margin-left: 4px; }
+.actbadge { margin-left: 6px; font-size: 11px; color: var(--muted); }
+.actbadge.fail { color: var(--err); }
+
 /* animation controls */
 .animbox { margin: 6px 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; }
 .animbox .frames { align-items: flex-end; gap: 12px; margin-top: 4px; }
