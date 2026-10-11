@@ -102,6 +102,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return self._json(m.snapshot())
             if parts[1:] == ["browse"]:
                 return self._json(m.browse(q.get("dir"), q.get("kind", "scene")))
+            if parts[1:] == ["animinfo"]:
+                return self._json(m.scene_animinfo(q.get("file", "")))
             if len(parts) == 4 and parts[1] == "scene" and parts[3] == "thumb":
                 p = m.thumbnail(int(parts[2]), int(q.get("w", 400)))
                 if p is None:
@@ -109,7 +111,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return self._file(p, "image/jpeg")
             if len(parts) == 4 and parts[1] == "scene" and parts[3] == "image":
                 sc = m._scene(int(parts[2]))
-                return self._file(Path(sc.target), "image/png")
+                shown = m.display_file(sc)
+                return self._file(shown if shown else Path(sc.target), "image/png")
             if len(parts) == 4 and parts[1] == "scene" and parts[3] == "denoised":
                 from .denoise import denoised_path
                 sc = m._scene(int(parts[2]))
@@ -151,7 +154,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 m.install_denoiser()
             elif route == "scenes/add":
                 n = m.add_scenes(body.get("files", []), body.get("targetDir"), body.get("postLoaders"),
-                                 body.get("atTop", False), bool(body.get("denoise", False)))
+                                 body.get("atTop", False), bool(body.get("denoise", False)), body.get("anim"),
+                                 body.get("imageSize"), body.get("actions"))
                 return self._json({"added": n})
             elif route == "scenes/reorder":
                 return self._json({"indices": m.reorder(body.get("indices", []), int(body.get("to", 0)))})
@@ -170,7 +174,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                 elif action == "done":
                     m.mark_done(i)
                 elif action == "edit":
-                    m.edit_scene(i, body.get("target"), body.get("postLoaders"), body.get("camera"), body.get("denoise"))
+                    m.edit_scene(i, body.get("target"), body.get("postLoaders"), body.get("camera"), body.get("denoise"),
+                                 body.get("anim"), body.get("frameFirst"), body.get("frameLast"),
+                                 body.get("imageSize", "keep"), body.get("actions"))
                 elif action == "denoise":
                     m.set_denoise(i, bool(body.get("on", True)))
                 else:
@@ -181,6 +187,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     job_timeout_s=body.get("jobTimeoutS"), stall_timeout_s=body.get("stallTimeoutS"),
                     max_attempts=body.get("maxAttempts"), image_size=body.get("imageSize"), daz_exe=body.get("dazExe"),
                     web_port=body.get("webPort"), mode=body.get("mode"), notifications=body.get("notifications"),
+                    anim_split=body.get("animSplit"), actions=body.get("actions"),
                     denoiser_exe=body.get("denoiserExe"), denoise_keep_original=body.get("denoiseKeepOriginal"),
                 )
             else:

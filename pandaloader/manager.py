@@ -54,15 +54,40 @@ class Manager:
 
     # -- persistence of the manager's own little state ------------------------
     def _load_state(self) -> None:
+        self._last_queue_pending: Optional[str] = None  # last queue not reachable yet (Dropbox/drive not up)
         try:
             d = json.loads(self._state_file.read_text(encoding="utf-8"))
-            self.recent = [p for p in d.get("recent", []) if Path(p).exists()]
-            last = d.get("lastQueue")
-            if last and Path(last).exists():
-                self.queue = QueueFile.load(last)
-                self.status.set_queue(Path(last).as_posix(), self.queue.counts(), self.queue.average_secs())
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as e:
+            log.info("no manager state restored: %s", e)
+            return
+        self.recent = [p for p in d.get("recent", []) if Path(p).exists()]
+        last = d.get("lastQueue")
+        if last and not self._restore_queue(last):
+            self._last_queue_pending = last
+            self.status.log(f"last queue not reachable yet, waiting for it: {last}", level="warning")
+
+    def _restore_queue(self, path: str) -> bool:
+        """Reopen the queue used last time. False if the file is not there (yet) or unreadable."""
+        try:
+            if not Path(path).is_file():
+                return False
+            self.queue = QueueFile.load(path)
+            self.status.set_queue(Path(path).as_posix(), self.queue.counts(), self.queue.average_secs())
+            self.status.log(f"reopened {Path(path).name}: {self.queue.counts()}")
+            log.info("reopened last queue %s", path)
+            self._warn_moved_files()
+            return True
+        except (OSError, ValueError) as e:
+            log.warning("could not reopen last queue %s: %s", path, e)
+            self.status.log(f"could not reopen {path}: {e}", level="error")
+            return False
+
+    def _retry_last_queue(self) -> None:
+        """Called on every snapshot: a queue on a drive that was not mounted at start (Dropbox,
+        network share) is picked up as soon as it appears, until the user opens something else."""
+        if self._last_queue_pending and self.queue is None and Path(self._last_queue_pending).is_file():
+            path, self._last_queue_pending = self._last_queue_pending, None
+            self._restore_queue(path)
 
     def _save_state(self) -> None:
         try:
@@ -107,6 +132,15 @@ class Manager:
             self._publish()
             self._remember(str(p))
             self.status.log(f"opened {p.name}: {self.queue.counts()}")
+            self._warn_moved_files()
+
+    def _warn_moved_files(self) -> None:
+        """Scenes still to render whose .duf is no longer at the recorded path. Done scenes
+        with a moved file are normal (the user files them away) and are not mentioned."""
+        gone = [s.name for s in self.queue.scenes if not s.is_done and s.file and not Path(s.file).is_file()]
+        if gone:
+            self.status.log(f"{len(gone)} scene(s) to render whose .duf is not at the recorded path: "
+                            + ", ".join(gone[:5]) + ("…" if len(gone) > 5 else ""), level="warning")
 
     def new_queue(self, path: str) -> None:
         with self.lock:
@@ -161,7 +195,9 @@ class Manager:
             c = q.counts()
             if c["pending"] == 0 and c["running"] == 0 and c["toDenoise"] == 0:
                 raise ManagerError("nothing pending and nothing to denoise; reset scenes first")
-            if c["pending"] == 0 and c["running"] == 0 and not _denoiser_valid(self.cfg.denoiser_exe):
+            q = self._require_queue()
+            only_denoise = c["pending"] == 0 and c["running"] == 0 and not any(s.pending_actions() for s in q.scenes)
+            if only_denoise and not _denoiser_valid(self.cfg.denoiser_exe):
                 raise ManagerError("only denoise jobs are waiting, but no valid denoiser path is set in Settings")
             if not self.cfg.run_slots():
                 raise ManagerError("no worker is enabled; enable one in Settings")
@@ -251,11 +287,24 @@ class Manager:
         return self.scheduler.qlock if self.scheduler is not None else self.lock
 
     def add_scenes(self, files: List[str], target_dir: Optional[str] = None,
-                   post_loaders: Optional[List[str]] = None, at_top: bool = False, denoise: bool = False) -> int:
+                   post_loaders: Optional[List[str]] = None, at_top: bool = False, denoise: bool = False,
+                   anim: Optional[dict] = None, image_size: Optional[list] = None,
+                   actions: Optional[list] = None) -> int:
+        """anim: {"frameFirst": a, "frameLast": b} renders the (single) scene as an animation.
+        image_size: [w, h] overrides the preset's render size for every added scene.
+        actions: ids from the action stock to run when each scene is done."""
+        size = _parse_size(image_size)
+        action_ids = self._check_action_ids(actions)
+        anim_range = None
+        if anim and len(files) == 1:
+            a, b = int(anim.get("frameFirst", 0)), int(anim.get("frameLast", 0))
+            if b < a:
+                raise ManagerError("last frame must not be before the first frame")
+            anim_range = (a, b)
         with self.lock, self._qlock():
             q = self._require_queue()
             if post_loaders is None:
-                post_loaders = self._default_post_loaders()
+                post_loaders = []  # pre-render assets are per scene, never inherited from earlier entries
             tdir = Path(target_dir) if target_dir else self._default_target_dir()
             added = 0
             new_entries = []
@@ -266,7 +315,15 @@ class Manager:
                 if any(Path(s.file) == p for s in q.scenes):
                     continue
                 target = (tdir / (p.stem + ".png")).as_posix() if tdir else ""
-                sc = q.add_scene(p.as_posix(), target, post_loaders, denoise=denoise)
+                if anim_range:
+                    sc = q.add_scene(p.as_posix(), target, post_loaders, denoise=denoise, anim=True,
+                                     frame_first=anim_range[0], frame_last=anim_range[1])
+                else:
+                    sc = q.add_scene(p.as_posix(), target, post_loaders, denoise=denoise)
+                if size:
+                    sc.set_image_size(size)
+                if action_ids:
+                    sc.set_actions(action_ids)
                 new_entries.append(sc.data)
                 added += 1
             if at_top and new_entries:
@@ -335,7 +392,7 @@ class Manager:
             sc = self._scene(index)
             if sc.state == STATE_RUNNING:
                 raise ManagerError("scene is rendering")
-            sc.mark_pending()
+            sc.mark_pending(keep_frames=False)
             sc.data.pop("lastError", None)
             self._commit(f"reset {sc.name} to pending")
 
@@ -392,14 +449,32 @@ class Manager:
             self._commit()
 
     def edit_scene(self, index: int, target: Optional[str] = None, post_loaders: Optional[List[str]] = None,
-                   camera: Optional[str] = None, denoise: Optional[bool] = None) -> None:
-        """camera: '' or None keeps 'camera saved with scene'; a label forces that camera."""
+                   camera: Optional[str] = None, denoise: Optional[bool] = None, anim: Optional[bool] = None,
+                   frame_first: Optional[int] = None, frame_last: Optional[int] = None,
+                   image_size: Optional[list] = "keep", actions: Optional[list] = None) -> None:
+        """camera: '' or None keeps 'camera saved with scene'; a label forces that camera.
+        image_size: [w, h] sets the per-scene render size, [] or None clears it, "keep" leaves it.
+        actions: list of action ids (None leaves them)."""
         with self.lock, self._qlock():
             sc = self._scene(index)
             if sc.state == STATE_RUNNING:
                 raise ManagerError("scene is rendering")
             if denoise is not None:
                 sc.denoise = bool(denoise)
+            if actions is not None:
+                sc.set_actions(self._check_action_ids(actions))
+            if image_size != "keep":
+                sc.set_image_size(_parse_size(image_size))
+            if anim is not None or frame_first is not None or frame_last is not None:
+                on = sc.anim if anim is None else bool(anim)
+                a = sc.frame_first if frame_first is None else int(frame_first)
+                b = sc.frame_last if frame_last is None else int(frame_last)
+                if on and b < a:
+                    raise ManagerError("last frame must not be before the first frame")
+                if on != sc.anim or a != sc.frame_first or b != sc.frame_last:
+                    if sc.is_done and on:
+                        sc.mark_pending(keep_frames=True)  # new/changed range: render what is missing
+                    sc.set_anim(on, a, b)
             if target is not None:
                 sc.target = Path(target).as_posix() if target else ""
             if post_loaders is not None:
@@ -457,8 +532,21 @@ class Manager:
                         max_attempts: Optional[int] = None, image_size: Optional[list] = None,
                         daz_exe: Optional[str] = None, web_port: Optional[int] = None,
                         mode: Optional[str] = None, notifications: Optional[dict] = None,
-                        denoiser_exe: Optional[str] = None, denoise_keep_original: Optional[bool] = None) -> None:
+                        denoiser_exe: Optional[str] = None, denoise_keep_original: Optional[bool] = None,
+                        anim_split: Optional[bool] = None, actions: Optional[list] = None) -> None:
         with self.lock:
+            if actions is not None:
+                from .actions import validate_actions
+                try:
+                    new = validate_actions(actions)
+                except ValueError as e:
+                    raise ManagerError(str(e))
+                if new != self.cfg.actions:
+                    self.cfg.actions = new
+                    self.status.log(f"action stock: {len(new)} action(s): " + ", ".join(a["label"] for a in new) if new else "action stock cleared")
+            if anim_split is not None and bool(anim_split) != self.cfg.anim_split:
+                self.cfg.anim_split = bool(anim_split)
+                self.status.log("animations: " + ("frames split across free workers" if self.cfg.anim_split else "one worker per animation"))
             if denoise_keep_original is not None and bool(denoise_keep_original) != self.cfg.denoise_keep_original:
                 self.cfg.denoise_keep_original = bool(denoise_keep_original)
                 self.status.log("denoise: " + ("keep original, write _denoised copy" if self.cfg.denoise_keep_original else "replace the render in place"))
@@ -588,16 +676,36 @@ class Manager:
                     return c
         return documents_dir()
 
+    def _check_action_ids(self, ids: Optional[list]) -> list:
+        """Only ids that exist in the stock, in the given order."""
+        if not ids:
+            return []
+        stock = {a["id"] for a in self.cfg.actions}
+        unknown = [str(a) for a in ids if str(a) not in stock]
+        if unknown:
+            raise ManagerError("unknown action(s): " + ", ".join(unknown))
+        return [str(a) for a in ids]
+
+    def scene_animinfo(self, file: str) -> dict:
+        """Timeline facts of a scene file (for the Add dialog), see dufinfo.anim_info."""
+        p = Path(file)
+        if p.suffix.lower() not in SCENE_EXTS or not p.is_file():
+            raise ManagerError(f"not a scene file: {file}")
+        return dufinfo.anim_info(p)
+
     def scene_cameras(self, index: int) -> dict:
         sc = self._scene(index)
         doc = dufinfo.load_duf(sc.file)
         return {"current": dufinfo.current_camera_label(sc.file, doc), "cameras": dufinfo.camera_labels(sc.file, doc)}
 
+    def display_file(self, sc) -> Optional[Path]:
+        return _display_file(sc)
+
     def thumbnail(self, index: int, width: int = 400) -> Optional[Path]:
         """Cached scaled copy of a scene's rendered target, or None if not rendered yet."""
         sc = self._scene(index)
-        target = Path(sc.target)
-        if not target.exists():
+        target = self.display_file(sc)
+        if target is None:
             return None
         from PIL import Image  # optional dependency only needed here
         cache = Path(self.cfg.work_dir) / "thumbs"
@@ -626,6 +734,7 @@ class Manager:
     # -- snapshot for the UI -------------------------------------------------------
     def snapshot(self) -> dict:
         with self.lock:
+            self._retry_last_queue()
             snap = self.status.snapshot()
             snap["running"] = self.running
             snap["firstRun"] = self.first_run
@@ -638,11 +747,14 @@ class Manager:
                 for s in q.scenes:
                     d = s.to_dict()
                     d["mtime"] = self._file_mtime(s.file)
+                    d["fileExists"] = d["mtime"] is not None  # .duf moved away after rendering is normal
                     d["postLoaders"] = s.post_loaders
                     d["savedCamera"] = s.uses_saved_camera
                     d["worker"] = running_index.get(s.index)
-                    d["targetExists"] = Path(s.target).exists() if s.target else False
-                    d["denoisedFile"] = _denoised_file(s.target)
+                    shown = _display_file(s)
+                    d["targetExists"] = shown is not None
+                    d["shownFile"] = shown.as_posix() if shown else None
+                    d["denoisedFile"] = _denoised_file(s.target) if not s.anim else None
                     scenes.append(d)
                 snap["queue"]["log"] = q.data.get("log", [])[-30:]
             snap["scenes"] = scenes
@@ -653,6 +765,7 @@ class Manager:
                 "maxAttempts": self.cfg.max_attempts, "imageSize": list(self.cfg.image_size) if self.cfg.image_size else None,
                 "shutdownAfterQueue": self.cfg.shutdown_after_queue, "workDir": self.cfg.work_dir,
                 "webPort": self.cfg.web_port, "mode": self.cfg.mode, "notifications": dict(self.cfg.notifications),
+                "animSplit": self.cfg.anim_split, "actions": [dict(a) for a in self.cfg.actions],
                 "denoiserExe": self.cfg.denoiser_exe, "denoiserValid": _denoiser_valid(self.cfg.denoiser_exe),
                 "denoiseKeepOriginal": self.cfg.denoise_keep_original,
                 "denoiserInstall": dict(self._denoiser_install) if self._denoiser_install else None,
@@ -660,6 +773,30 @@ class Manager:
             }
             snap["gpus"] = _gpus()
             return snap
+
+
+def _parse_size(value) -> Optional[tuple]:
+    """[w, h] / (w, h) -> (w, h) of positive ints; anything else -> None."""
+    try:
+        if value and len(value) == 2 and int(value[0]) > 0 and int(value[1]) > 0:
+            return int(value[0]), int(value[1])
+    except (TypeError, ValueError):
+        pass
+    if value:
+        raise ManagerError("render size needs a positive width and height")
+    return None
+
+
+def _display_file(sc) -> Optional[Path]:
+    """The image to show for a scene: its target, or the latest finished frame of an animation."""
+    if sc.anim:
+        for f in reversed(sc.frames_done):
+            p = Path(sc.frame_target(f))
+            if p.is_file():
+                return p
+        return None
+    p = Path(sc.target) if sc.target else None
+    return p if p and p.is_file() else None
 
 
 def _denoised_file(target: str) -> Optional[str]:
@@ -681,10 +818,6 @@ def _gpus() -> list:
     return gpumon.gpus()
 
 
-def _drives() -> list:
-    if os.name != "nt":
-        return ["/"]
-    return [f"{c}:/" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if Path(f"{c}:/").exists()]
 def documents_dir() -> Path:
     """The user's Documents folder (Windows known folder), falling back to the home dir."""
     if os.name == "nt":
@@ -701,3 +834,7 @@ def documents_dir() -> Path:
     return d if d.is_dir() else Path.home()
 
 
+def _drives() -> list:
+    if os.name != "nt":
+        return ["/"]
+    return [f"{c}:/" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if Path(f"{c}:/").exists()]

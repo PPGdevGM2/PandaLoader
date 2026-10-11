@@ -30,6 +30,10 @@ class WorkerStatus:
     last_error: str = ""
     jobs_done: int = 0
     jobs_failed: int = 0
+    frames: int = 0                     # frames in this job (0 = still image)
+    frames_done: int = 0                # finished within this job
+    frame: Optional[int] = None         # frame being rendered
+    frame_first: Optional[int] = None   # first frame of this job's block
 
     def eta_s(self, startup_overhead: float, now: Optional[float] = None) -> Optional[float]:
         """Estimated seconds until this job finishes, or None when idle."""
@@ -53,6 +57,7 @@ class WorkerStatus:
             "iterations": self.iterations, "expectedSecs": self.expected_secs,
             "eta": self.eta_s(startup_overhead, now), "pid": self.pid, "lastError": self.last_error,
             "jobsDone": self.jobs_done, "jobsFailed": self.jobs_failed,
+            "frames": self.frames, "framesDone": self.frames_done, "frame": self.frame, "frameFirst": self.frame_first,
         }
 
 
@@ -97,6 +102,8 @@ class Status:
             ws.job_started = ws.render_started = None
             ws.iterations = ws.render_elapsed = 0.0
             ws.pid = None
+            ws.frames = ws.frames_done = 0
+            ws.frame = ws.frame_first = None
 
     def set_queue(self, path: str, counts: dict, average_secs: Optional[float]) -> None:
         with self._lock:

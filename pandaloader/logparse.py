@@ -132,6 +132,11 @@ class Progress:
     log_t_render_start: Optional[float] = None
     log_t_finished: Optional[float] = None
     lines: int = 0
+    # animations: one 'Rendering image...' / 'Finished rendering.' pair per frame
+    frames_started: int = 0
+    frames_finished: int = 0
+    frame_secs: List[float] = field(default_factory=list)   # per finished frame, log timestamps
+    saved_images: List[str] = field(default_factory=list)
 
     @property
     def cpu_rendered(self) -> bool:
@@ -160,6 +165,8 @@ class Progress:
             "converged": self.converged, "savedImage": self.saved_image, "finished": self.finished,
             "exited": self.exited, "errors": list(self.errors), "cudaDevices": self.cuda_devices,
             "devices": [list(d) for d in self.devices], "cpuRendered": self.cpu_rendered,
+            "framesStarted": self.frames_started, "framesFinished": self.frames_finished,
+            "frameSecs": list(self.frame_secs),
         }
 
 
@@ -200,6 +207,12 @@ class LogParser:
         if _RE_RENDER_START.search(line):
             p.phase = PHASE_RENDERING
             p.t_render_start = now
+            p.frames_started += 1
+            if p.frames_started > 1:  # next frame of an animation: per-frame counters restart
+                p.iterations = 0.0
+                p.render_elapsed = 0.0
+                p.converged = False
+                p.finished = False
             p.log_t_render_start = _line_time(line)
             return "render_start"
         if _RE_CONVERGED.search(line):
@@ -212,12 +225,16 @@ class LogParser:
         m = _RE_SAVED.search(line)
         if m:
             p.saved_image = m.group(1).strip()
+            p.saved_images.append(p.saved_image)
             p.phase = PHASE_SAVING
             return "saved"
         if _RE_FINISHED.search(line):
             p.finished = True
             p.t_finished = now
             p.log_t_finished = _line_time(line)
+            p.frames_finished += 1
+            if p.log_t_render_start is not None and p.log_t_finished is not None and p.log_t_finished >= p.log_t_render_start:
+                p.frame_secs.append(p.log_t_finished - p.log_t_render_start)
             p.phase = PHASE_FINISHED
             return "finished"
         m = _RE_TOTAL_TIME.search(line)

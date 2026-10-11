@@ -35,12 +35,14 @@ class JobResult:
     progress: Progress
     warnings: List[str] = field(default_factory=list)
     log_tail: List[str] = field(default_factory=list)
+    frames_ok: List[int] = field(default_factory=list)   # animation: frames with a fresh output file
 
     def to_dict(self) -> dict:
         return {
             "ok": self.ok, "reason": self.reason, "exitCode": self.exit_code, "killed": self.killed,
             "durationS": self.duration_s, "renderSecs": self.render_secs, "iterations": self.iterations,
             "scriptResult": self.script_result, "warnings": list(self.warnings), "progress": self.progress.to_dict(),
+            "framesOk": list(self.frames_ok),
         }
 
 
@@ -158,7 +160,7 @@ class WorkerRun:
             now = time.time()
             if self._stop_requested:
                 reason, killed = "stopped by user", True
-            elif now - start > cfg.job_timeout_s:
+            elif now - start > cfg.job_timeout_s * max(1, len(self.spec.frames)):  # per frame for animations
                 reason, killed = f"timeout after {int(now - start)} s", True
             elif now - last_activity > cfg.stall_timeout_s:
                 reason, killed = f"no log activity for {int(now - last_activity)} s (phase {progress.phase})", True
@@ -179,7 +181,17 @@ class WorkerRun:
         duration = time.time() - start
         exit_code = self.proc.returncode
         script_result = self._read_result(result_file)
-        output_ok = self._output_fresh(target, start)
+        frames_ok: List[int] = []
+        if self.spec.frames:
+            # Each frame stands on its own: a crash after frame 3 still keeps frames 0-3.
+            fr = (script_result or {}).get("frames", {}) or {}
+            for f, path in zip(self.spec.frames, self.spec.frame_targets):
+                rec = fr.get(str(f)) or {}
+                if rec.get("ok") and self._output_fresh(Path(path), start):
+                    frames_ok.append(int(f))
+            output_ok = len(frames_ok) == len(self.spec.frames)
+        else:
+            output_ok = self._output_fresh(target, start)
         warnings: List[str] = []
         if progress.cpu_rendered:
             warnings.append("CPU took part in the render; check the Hardware pane and -copyAppSettings")
@@ -194,7 +206,11 @@ class WorkerRun:
             elif not script_result.get("ok"):
                 reason = reason or f"render returned {script_result.get('renderReturned')!r} at stage {script_result.get('stage')}"
             if not output_ok:
-                reason = reason or "output file missing or stale"
+                if self.spec.frames:
+                    missing = [f for f in self.spec.frames if f not in frames_ok]
+                    reason = reason or f"frames not rendered: {missing[:8]}{'...' if len(missing) > 8 else ''}"
+                else:
+                    reason = reason or "output file missing or stale"
         ok = (not killed) and script_result is not None and bool(script_result.get("ok")) and output_ok and not progress.errors
         if ok:
             reason = "ok"
@@ -202,7 +218,7 @@ class WorkerRun:
         return JobResult(
             ok=ok, reason=reason, exit_code=exit_code, killed=killed, duration_s=duration,
             render_secs=progress.render_secs, iterations=progress.iterations, script_result=script_result,
-            progress=progress, warnings=warnings, log_tail=list(self._recent[-40:]),
+            progress=progress, warnings=warnings, log_tail=list(self._recent[-40:]), frames_ok=frames_ok,
         )
 
     # -- helpers ---------------------------------------------------------------

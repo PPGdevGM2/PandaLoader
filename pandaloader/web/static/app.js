@@ -169,7 +169,12 @@ function workerCard(w) {
   let frac = 0;
   if (st === "starting") frac = 0.03;
   else if (st === "loading") frac = 0.1;
-  else if (st === "rendering") frac = 0.1 + 0.88 * Math.min(1, w.expectedSecs ? w.renderElapsed / w.expectedSecs : 0);
+  else if (st === "rendering") {
+    if (w.frames) {
+      const per = w.expectedSecs / w.frames;
+      frac = 0.1 + 0.88 * Math.min(1, (w.framesDone + Math.min(1, per ? w.renderElapsed / per : 0)) / w.frames);
+    } else frac = 0.1 + 0.88 * Math.min(1, w.expectedSecs ? w.renderElapsed / w.expectedSecs : 0);
+  }
   else if (st === "saving" || st === "finished") frac = 1;
   const gpu = w.gpu == null ? "all GPUs" : `GPU ${w.gpu}`;
   if (st === "idle") {
@@ -182,7 +187,7 @@ function workerCard(w) {
   return `<div class="worker ${st}">
     <div class="head"><span class="wname">${esc(w.name)}</span><span class="gpu">${gpu}</span><span class="phase ${st}">${st}</span>${gaugeToggle(w)}</div>
     <div class="body"><div class="main">
-    <div class="scene">${esc(w.sceneName)}<span class="cam">${esc(w.camera || "")}</span></div>
+    <div class="scene">${esc(w.sceneName)}${w.frames ? ` <span class="hint">frame ${w.frame} · ${w.framesDone}/${w.frames} of this block</span>` : ""}<span class="cam">${esc(w.camera || "")}</span></div>
     <div class="bar"><i style="width:${(frac * 100).toFixed(1)}%"></i></div>
     <div class="stats">
       <span>iterations <b>${Math.round(w.iterations)}</b></span>
@@ -206,17 +211,28 @@ function sceneRow(sc, find) {
   const cls = [sc.index === selected ? "selected" : "", inSel ? "multi" : "", found ? "found" : ""].join(" ");
   const stateTxt = sc.stateName === "running" && sc.worker ? `${sc.worker}` : sc.stateName;
   const cam = sc.savedCamera ? (sc.camera ? `${esc(sc.camera)} <span class="hint">(saved)</span>` : `<span class="hint">saved with scene</span>`) : `<b>${esc(sc.camera)}</b>`;
-  const assets = sc.postLoaders.length ? `${sc.postLoaders.length} PRA` : "";
-  const last = sc.lastSecs ? hms(sc.lastSecs) : "";
+  const assets = [sc.postLoaders.length ? `${sc.postLoaders.length} PRA` : "", sc.imageSize ? `${sc.imageSize[0]}×${sc.imageSize[1]}` : ""].filter(Boolean).join(" · ");
+  let last = sc.lastSecs ? hms(sc.lastSecs) : "";
+  if (sc.anim) {
+    const frac = sc.framesTotal ? sc.framesDone / sc.framesTotal : 0;
+    last = `<span class="frames-cell" title="animation: frames ${sc.frameFirst}-${sc.frameLast}${sc.lastSecs ? `, ${hms(sc.lastSecs)} per frame` : ""}"><span class="fbar"><i style="width:${(frac * 100).toFixed(0)}%"></i></span>${sc.framesDone}/${sc.framesTotal} frames</span>`;
+  }
   const err = sc.lastError ? ` title="${esc(sc.lastError)}"` : "";
   const dnMark = sc.denoised === true ? `<span class="dnok" title="denoised">✓</span>` : sc.denoised === false ? `<span class="dnfail" title="denoise failed, see queue log">!</span>`
     : (sc.denoise && sc.stateName === "done") ? `<span class="dnwait" title="waiting: will be denoised by the next run">…</span>` : "";
-  const dn = `<input type="checkbox" class="dnbox" data-act="denoise" ${sc.denoise ? "checked" : ""} title="Post-render denoise${state.config.denoiserValid ? "" : " (no valid denoiser path in Settings: flag is skipped)"}">${dnMark}`;
+  let actBadge = "";
+  if (sc.actions && sc.actions.length) {
+    const byId = Object.fromEntries((state.config.actions || []).map((a) => [a.id, a.label]));
+    const done = sc.actionsDone || {}, failed = sc.actions.some((id) => done[id] === false), all = sc.actions.every((id) => done[id] === true);
+    const tip = sc.actions.map((id) => `${byId[id] || id}: ${done[id] === true ? "ran" : done[id] === false ? "FAILED" : "waiting"}`).join("\n");
+    actBadge = `<span class="actbadge ${failed ? "fail" : ""}" title="${esc(tip)}">+${sc.actions.length}${all ? "✓" : failed ? "!" : ""}</span>`;
+  }
+  const dn = `<input type="checkbox" class="dnbox" data-act="denoise" ${sc.denoise ? "checked" : ""} title="Post-render denoise${state.config.denoiserValid ? "" : " (no valid denoiser path in Settings: flag is skipped)"}">${dnMark}${actBadge}`;
   return `<tr class="${cls}" data-i="${sc.index}"${err} draggable="true">
     <td class="sel"><input type="checkbox" class="selbox" ${inSel ? "checked" : ""}></td>
     <td class="num">${sc.index + 1}</td>
     <td class="state"><span class="badge ${sc.stateName}">${esc(stateTxt)}</span></td>
-    <td>${esc(sc.name)}.duf</td>
+    <td>${esc(sc.name)}.duf${sc.fileExists || sc.stateName === "done" ? "" : ` <span class="moved warn" title="${esc(sc.file)}">file missing</span>`}</td>
     <td class="hint">${fmtDate(sc.mtime)}</td>
     <td>${cam}</td>
     <td>${last}</td>
@@ -235,8 +251,9 @@ function renderDetails(sc, full) {
   const d = $("details");
   d.hidden = false;
   $("dTitle").textContent = sc.name;
-  $("dFile").textContent = sc.file;
-  $("dState").innerHTML = `<span class="badge ${sc.stateName}">${sc.stateName}</span>` + (sc.lastSecs ? ` last render ${hms(sc.lastSecs)}` : "");
+  $("dFile").textContent = sc.file + (sc.fileExists || sc.stateName === "done" ? "" : "  (NOT FOUND: the render will fail until the file is back or the entry is removed)");
+  $("dState").innerHTML = `<span class="badge ${sc.stateName}">${sc.stateName}</span>`
+    + (sc.anim ? ` animation ${sc.framesDone}/${sc.framesTotal} frames` : "") + (sc.lastSecs ? ` · last render ${hms(sc.lastSecs)}${sc.anim ? "/frame" : ""}` : "");
   $("dError").textContent = sc.lastError || "";
   const img = $("dThumb");
   if (sc.targetExists) {
@@ -251,7 +268,16 @@ function renderDetails(sc, full) {
     $("dTarget").value = sc.target || "";
     $("dAssets").value = sc.postLoaders.join("\n");
     $("dDenoise").checked = !!sc.denoise;
+    $("dActions")._done = sc.actionsDone || {}; $("dActions").innerHTML = actionListHtml(sc.actions || [], sc.actionsDone || {});
+    const whenDoneOn = !!sc.denoise || (sc.actions || []).length > 0;
+    $("dWhenDone").checked = whenDoneOn; $("dWhenDoneBody").hidden = !whenDoneOn;
     $("dDenoiseHint").textContent = state.config.denoiserValid ? (sc.denoised === true ? "last render was denoised" : sc.denoised === false ? "last denoise failed, see queue log" : "") : "no valid denoiser path in Settings";
+    $("dSizeOn").checked = !!sc.imageSize; $("dSizeRow").hidden = !sc.imageSize;
+    $("dWidth").value = sc.imageSize ? sc.imageSize[0] : ""; $("dHeight").value = sc.imageSize ? sc.imageSize[1] : "";
+    $("dAnim").checked = !!sc.anim; $("dFrameFirst").value = sc.frameFirst; $("dFrameLast").value = sc.frameLast;
+    $("dFrameRow").hidden = !sc.anim;
+    $("dAnimHint").textContent = sc.anim ? `frames ${sc.frameFirst}-${sc.frameLast}, files ${sc.name}_NN.png` : "one image per frame, split across workers";
+    $("dFrameHint").textContent = sc.anim && sc.framesDone ? `${sc.framesDone} done; a wider range renders only the missing frames` : "";
     const sel = $("dCamera");
     sel.innerHTML = `<option value="">camera saved with scene${sc.savedCamera && sc.camera ? ` (${esc(sc.camera)})` : ""}</option>`;
     if (!sc.savedCamera && sc.camera) sel.add(new Option(sc.camera, sc.camera, true, true));
@@ -477,8 +503,13 @@ document.addEventListener("keydown", (e) => {
 $("dClose").onclick = () => { selected = null; $("details").hidden = true; render(); };
 $("dForm").onsubmit = (e) => {
   e.preventDefault();
-  act(`/api/scene/${selected}/edit`, { target: $("dTarget").value.trim(), postLoaders: $("dAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), camera: $("dCamera").value, denoise: $("dDenoise").checked }, "scene saved");
+  let imageSize = null;
+  try { imageSize = sizeFrom("dSizeOn", "dWidth", "dHeight"); } catch (e2) { toast(e2.message); return; }
+  act(`/api/scene/${selected}/edit`, { target: $("dTarget").value.trim(), postLoaders: $("dAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), camera: $("dCamera").value,
+    anim: $("dAnim").checked, frameFirst: Number($("dFrameFirst").value), frameLast: Number($("dFrameLast").value), imageSize, ...whenDone("d") }, "scene saved");
 };
+$("dAnim").onchange = () => { $("dFrameRow").hidden = !$("dAnim").checked; };
+$("dSizeOn").onchange = () => { $("dSizeRow").hidden = !$("dSizeOn").checked; };
 $("dReset").onclick = () => act(`/api/scene/${selected}/reset`);
 $("dDone").onclick = () => act(`/api/scene/${selected}/done`);
 $("dRemove").onclick = async () => { if (confirm("Remove this scene?")) { await act(`/api/scene/${selected}/remove`); selected = null; $("details").hidden = true; render(); } };
@@ -495,16 +526,52 @@ $("dLoadCams").onclick = async () => {
 $("btnAdd").onclick = () => {
   const sc = state.scenes[state.scenes.length - 1];
   $("aTargetDir").value = sc && sc.target ? dirname(sc.target) : "";
-  $("aAssets").value = sc ? sc.postLoaders.join("\n") : "";
+  $("aAssets").value = "";  // never inherited from earlier scenes
   $("aFiles").value = "";
-  $("aDenoise").checked = sc ? !!sc.denoise : false;
+  $("aAnimBox").hidden = true; $("aAnim").checked = false; $("aFrameRow").hidden = true; animInfoFor = null;
+  $("aSizeOn").checked = false; $("aSizeRow").hidden = true; $("aWidth").value = ""; $("aHeight").value = "";
+  $("aDenoise").checked = false;
+  $("aActions")._done = {}; $("aActions").innerHTML = actionListHtml([], {});
+  $("aWhenDone").checked = false; $("aWhenDoneBody").hidden = true;
   $("aDenoiseHint").textContent = state.config.denoiserValid ? "" : "no valid denoiser path in Settings: the flag is kept but skipped";
   $("addDlg").hidden = false;
 };
 $("aBrowse").onclick = async () => {
   const files = await browser.open({ title: "Pick scene files", kind: "scene", multi: true });
   if (files && files.length) $("aFiles").value = ($("aFiles").value.trim() ? $("aFiles").value.trim() + "\n" : "") + files.join("\n");
+  updateAddAnim();
 };
+// Animation is offered when exactly one scene is being added: the timeline is read from the .duf.
+let animInfoFor = null;
+async function updateAddAnim() {
+  const files = $("aFiles").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  const box = $("aAnimBox");
+  if (files.length !== 1) { box.hidden = true; $("aAnim").checked = false; animInfoFor = null; return; }
+  if (animInfoFor === files[0]) return;
+  animInfoFor = files[0];
+  // the timeline comes from the .duf itself; big scenes take a few seconds to parse
+  box.hidden = false; $("aAnim").checked = false; $("aAnim").disabled = true; $("aFrameRow").hidden = true;
+  $("aAnimHint").textContent = "reading the scene's timeline…";
+  try {
+    const info = await api(`/api/animinfo?file=${encodeURIComponent(files[0])}`);
+    if (animInfoFor !== files[0]) return;
+    $("aAnim").disabled = false;
+    $("aAnimHint").textContent = `${info.changing} of ${info.tracks} tracks change over the play range ${info.frameFirst}-${info.frameLast} at ${info.fps} fps`;
+    $("aFrameFirst").value = info.frameFirst; $("aFrameLast").value = info.frameLast;
+    $("aFrameHint").textContent = `${info.frameLast - info.frameFirst + 1} frames, files <scene>_NN.png`;
+    $("aAnim").checked = false; $("aFrameRow").hidden = true;
+  } catch (e) { if (animInfoFor === files[0]) { $("aAnimHint").textContent = `timeline not readable: ${e.message}`; $("aAnim").disabled = true; } }
+}
+$("aFiles").addEventListener("change", updateAddAnim);
+$("aFiles").addEventListener("blur", updateAddAnim);
+$("aAnim").onchange = () => { $("aFrameRow").hidden = !$("aAnim").checked; };
+$("aSizeOn").onchange = () => { $("aSizeRow").hidden = !$("aSizeOn").checked; };
+function sizeFrom(onId, wId, hId) {
+  if (!$(onId).checked) return null;
+  const w = Number($(wId).value), h = Number($(hId).value);
+  if (!(w > 0 && h > 0)) throw new Error("render size needs a positive width and height");
+  return [w, h];
+}
 $("aTargetBrowse").onclick = async () => {
   const d = await browser.open({ title: "Target folder", dirsOnly: true, start: $("aTargetDir").value || null });
   if (d) $("aTargetDir").value = d;
@@ -517,7 +584,10 @@ $("addForm").onsubmit = async (e) => {
   e.preventDefault();
   const files = $("aFiles").value.split("\n").map((s) => s.trim()).filter(Boolean);
   if (!files.length) { toast("no scene files"); return; }
-  const d = await act("/api/scenes/add", { files, targetDir: $("aTargetDir").value.trim() || null, postLoaders: $("aAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), atTop: $("aTop").checked, denoise: $("aDenoise").checked });
+  const anim = files.length === 1 && !$("aAnimBox").hidden && $("aAnim").checked ? { frameFirst: Number($("aFrameFirst").value), frameLast: Number($("aFrameLast").value) } : null;
+  let imageSize = null;
+  try { imageSize = sizeFrom("aSizeOn", "aWidth", "aHeight"); } catch (e2) { toast(e2.message); return; }
+  const d = await act("/api/scenes/add", { files, targetDir: $("aTargetDir").value.trim() || null, postLoaders: $("aAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), atTop: $("aTop").checked, anim, imageSize, ...whenDone("a") });
   if (d) { toast(`${d.added} scene(s) added`, true); $("addDlg").hidden = true; }
 };
 
@@ -534,9 +604,11 @@ $("btnSettings").onclick = () => {
   const c = state.config;
   $("sWorkers").innerHTML = c.workers.map((w) => workerRowHtml(w, state.gpus)).join("");
   document.querySelectorAll("input[name=sMode]").forEach((r) => (r.checked = r.value === (c.mode || "parallel")));
+  document.querySelectorAll("input[name=sAnim]").forEach((r) => (r.checked = r.value === (c.animSplit ? "split" : "whole")));
+  $("sActions").innerHTML = (c.actions || []).map(actionRowHtml).join("");
   document.querySelectorAll("input[data-note]").forEach((cb) => (cb.checked = (c.notifications || {})[cb.dataset.note] !== false));
   $("sTimeout").value = c.jobTimeoutS; $("sStall").value = c.stallTimeoutS; $("sAttempts").value = c.maxAttempts;
-  $("sSize").value = c.imageSize ? c.imageSize.join("x") : ""; $("sDaz").value = c.dazExe; $("sPort").value = c.webPort;
+  $("sDaz").value = c.dazExe; $("sPort").value = c.webPort;
   $("sDenoiser").value = c.denoiserExe || ""; $("sKeepOriginal").checked = !!c.denoiseKeepOriginal;
   lastInstalledExe = (c.denoiserInstall || {}).exe || null;  // an install that finished earlier is already in the field
   renderDenoiserState();
@@ -596,16 +668,77 @@ $("sAddWorker").onclick = () => {
   equalizeSettingsTabs();
 };
 $("sWorkers").addEventListener("click", (e) => { if (e.target.classList.contains("wdel")) { e.target.closest(".worker-row").remove(); equalizeSettingsTabs(); } });
+
+// ---------- action stock (Settings > Actions) and per-scene "Action when done" ----------
+const ACTION_TYPES = { move_scene: "Move the scene file to folder" };
+function actionRowHtml(a) {
+  const opts = Object.entries(ACTION_TYPES).map(([v, t]) => `<option value="${v}" ${a.type === v ? "selected" : ""}>${t}</option>`).join("");
+  return `<div class="action-row" data-id="${esc(a.id)}"><input type="text" class="alabel" value="${esc(a.label || "")}" placeholder="name (optional)">
+    <select class="atype">${opts}</select><input type="text" class="afolder mono" value="${esc((a.params || {}).folder || "")}" placeholder="folder: absolute, or .\\DONE = a DONE folder next to the scene's folder">
+    <button type="button" class="abrowse" title="Pick a folder">…</button><button type="button" class="adel" title="Remove from the stock">✕</button></div>`;
+}
+$("sAddAction").onclick = () => {
+  const id = Array.from(crypto.getRandomValues(new Uint8Array(4))).map((b) => b.toString(16).padStart(2, "0")).join("");
+  $("sActions").insertAdjacentHTML("beforeend", actionRowHtml({ id, type: "move_scene", label: "", params: { folder: "" } }));
+  equalizeSettingsTabs();
+};
+$("sActions").addEventListener("click", async (e) => {
+  const row = e.target.closest(".action-row"); if (!row) return;
+  if (e.target.classList.contains("adel")) { row.remove(); equalizeSettingsTabs(); }
+  else if (e.target.classList.contains("abrowse")) {
+    const d = await browser.open({ title: "Folder for the scene file", dirsOnly: true, start: row.querySelector(".afolder").value || null });
+    if (d) row.querySelector(".afolder").value = d;
+  }
+});
+// Per-scene selection: only the chosen actions are listed; a small dropdown adds one.
+function actionListHtml(ids, done) {
+  const stock = state.config.actions || [], byId = Object.fromEntries(stock.map((a) => [a.id, a]));
+  const rows = ids.map((id) => {
+    const a = byId[id], name = a ? a.label : `${id} (no longer in Settings > Actions)`;
+    const mark = done[id] === true ? `<span class="actok" title="ran">✓</span>` : done[id] === false ? `<span class="actfail" title="failed, see queue log">!</span>` : "";
+    return `<label class="check actsel" data-id="${esc(id)}"><button type="button" class="actdel" title="Remove">✕</button> ${esc(name)}${mark}</label>`;
+  }).join("");
+  const free = stock.filter((a) => !ids.includes(a.id));
+  const add = stock.length ? `<select class="actadd"><option value="">+ add action…</option>${free.map((a) => `<option value="${esc(a.id)}">${esc(a.label)}</option>`).join("")}</select>`
+    : `<span class="hint empty">no actions defined yet (Settings → Actions)</span>`;
+  return rows + add;
+}
+function actionIds(container) { return [...container.querySelectorAll(".actsel")].map((l) => l.dataset.id); }
+function wireActionList(container) {
+  container.addEventListener("change", (e) => {
+    if (!e.target.classList.contains("actadd") || !e.target.value) return;
+    const ids = actionIds(container).concat([e.target.value]);
+    container.innerHTML = actionListHtml(ids, container._done || {});
+  });
+  container.addEventListener("click", (e) => {
+    if (!e.target.classList.contains("actdel")) return;
+    e.preventDefault();
+    const ids = actionIds(container).filter((id) => id !== e.target.closest(".actsel").dataset.id);
+    container.innerHTML = actionListHtml(ids, container._done || {});
+  });
+}
+wireActionList($("aActions")); wireActionList($("dActions"));
+$("aWhenDone").onchange = () => { $("aWhenDoneBody").hidden = !$("aWhenDone").checked; };
+$("dWhenDone").onchange = () => { $("dWhenDoneBody").hidden = !$("dWhenDone").checked; };
+// an unticked "Action when done" means: no denoise, no actions
+function whenDone(prefix) {
+  const on = $(prefix + "WhenDone").checked;
+  return { denoise: on && $(prefix + "Denoise").checked, actions: on ? actionIds($(prefix + "Actions")) : [] };
+}
 $("settingsForm").onsubmit = async (e) => {
   e.preventDefault();
   const workers = [...$("sWorkers").querySelectorAll(".worker-row")].map((r) => ({ name: r.querySelector(".wname").value.trim(), gpu: r.querySelector(".wgpu").value, enabled: r.querySelector(".wenabled").checked }));
   const modeEl = document.querySelector("input[name=sMode]:checked");
-  const size = $("sSize").value.trim();
   const body = { jobTimeoutS: Number($("sTimeout").value), stallTimeoutS: Number($("sStall").value), maxAttempts: Number($("sAttempts").value),
-    imageSize: size ? size.toLowerCase().split("x").map(Number) : [], dazExe: $("sDaz").value.trim(), webPort: Number($("sPort").value),
+    dazExe: $("sDaz").value.trim(), webPort: Number($("sPort").value),
     denoiserExe: $("sDenoiser").value.trim(), denoiseKeepOriginal: $("sKeepOriginal").checked,
     notifications: Object.fromEntries([...document.querySelectorAll("input[data-note]")].map((cb) => [cb.dataset.note, cb.checked])) };
   if (!state.running) { body.workers = workers; if (modeEl) body.mode = modeEl.value; }
+  const animEl = document.querySelector("input[name=sAnim]:checked");
+  if (animEl) body.animSplit = animEl.value === "split";
+  body.actions = [...$("sActions").querySelectorAll(".action-row")].map((r) => ({
+    id: r.dataset.id, type: r.querySelector(".atype").value, label: r.querySelector(".alabel").value.trim(),
+    params: { folder: r.querySelector(".afolder").value.trim() } }));
   const newPort = body.webPort !== state.config.webPort ? body.webPort : null;
   const d = await act("/api/settings", body, "settings saved");
   if (d) {
