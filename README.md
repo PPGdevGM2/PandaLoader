@@ -3,7 +3,7 @@
 External render queue manager for DAZ Studio 6. It drives headless DAZ instances from outside, one per GPU (or all GPUs on one scene), using the `*.rq.json` queue files (compatible with ManFriday's Render Queue 3 queue files). 
 Web UI on port 6969 by default, tray icon for quick actions.
 
-**Run:** double-click `PandaLoader.exe`. A tray icon appears; the page is at <http://localhost:6969/> (the tray menu opens it). On the first start the page opens by itself with the checklist below (Settings → Setup).
+**Run:** double-click `PandaLoader.exe`. A tray icon appears and the page opens in the default browser at <http://localhost:6969/> (the tray menu opens it again; `--no-browser` skips it). On the first start it shows the checklist below (Settings → Setup).
 
 ## First-run checklist (fresh PC)
 
@@ -38,7 +38,7 @@ py -3.11 -m venv .venv
 
 Result: `dist\PandaLoader.exe` (single file, windowed). The version comes from
 `pandaloader/__init__.py` and shows up in the page header, the tray menu and the exe's file
-properties. Development run without building: `.venv\Scripts\python -m pandaloader tray --open`.
+properties. Development run without building: `.venv\Scripts\python -m pandaloader tray`.
 
 ## License
 

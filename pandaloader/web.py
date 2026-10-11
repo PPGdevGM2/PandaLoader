@@ -101,7 +101,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             if parts[1:] == ["state"]:
                 return self._json(m.snapshot())
             if parts[1:] == ["browse"]:
-                return self._json(m.browse(q.get("dir"), q.get("kind", "scene")))
+                return self._json(m.browse(q.get("dir"), q.get("kind", "scene"), q.get("key"), q.get("fallback")))
             if parts[1:] == ["animinfo"]:
                 return self._json(m.scene_animinfo(q.get("file", "")))
             if len(parts) == 4 and parts[1] == "scene" and parts[3] == "thumb":
@@ -150,6 +150,18 @@ class ApiHandler(BaseHTTPRequestHandler):
                 m.stop()
             elif route == "shutdown/abort":
                 m.abort_shutdown()
+            elif route == "app/quit":
+                # Clean exit (tray icon removed, state saved) for scripts such as a rebuild,
+                # instead of killing the process. Only from this PC, never while rendering.
+                if self.client_address[0] not in ("127.0.0.1", "::1"):
+                    return self._error("quit is only accepted from this PC", 403)
+                if m.running:
+                    return self._error("rendering: stop the run first", 409)
+                if m.on_quit is None:
+                    return self._error("not running with a tray icon", 400)
+                m.on_quit()
+            elif route == "browse/remember":
+                m.remember_browse(body.get("key", ""), body.get("dir", ""))
             elif route == "denoiser/install":
                 m.install_denoiser()
             elif route == "scenes/add":

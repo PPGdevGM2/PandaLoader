@@ -67,6 +67,7 @@ class TrayApp:
         self.icon = pystray.Icon("PandaLoader", draw_icon(self.logo, "idle", 0.0), "PandaLoader", menu=self._menu())
         self._install_session_handlers()
         manager.on_port_change = self.rebind
+        manager.on_quit = lambda: threading.Timer(0.3, self.quit).start()  # after the HTTP answer is out
         manager.status.listeners.append(self._on_event)
         purge_stale_tray_icons()  # ghosts of earlier, killed instances
 

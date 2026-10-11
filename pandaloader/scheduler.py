@@ -479,7 +479,8 @@ class Scheduler:
         self.status.update_worker(slot.name, state="denoising")
         self.status.log(f"denoising {scene.name}", worker=slot.name)
         ok, msg, _secs = denoise_in_place(exe, target, timeout_s=self.cfg.denoise_timeout_s,
-                                          keep_original=self.cfg.denoise_keep_original)
+                                          keep_original=self.cfg.denoise_keep_original,
+                                          scratch_dir=str(Path(self.cfg.work_dir) / "denoise"))
         return ok, msg
 
     # -- housekeeping ----------------------------------------------------------

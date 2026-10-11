@@ -297,8 +297,10 @@ function renderLog() {
 // ---------- file browser ----------
 const browser = {
   resolve: null, kind: "scene", multi: false, dirsOnly: false, selectedSet: new Set(), cur: null,
-  open({ title, kind = "scene", multi = false, dirsOnly = false, nameRow = false, start = null, defaultName = "" }) {
-    this.kind = kind; this.multi = multi; this.dirsOnly = dirsOnly; this.selectedSet = new Set();
+  // key: this picker's own "last used folder" (kept by the server); used when start is empty.
+  // fallback: where to start when that picker has no remembered folder yet.
+  open({ title, kind = "scene", multi = false, dirsOnly = false, nameRow = false, start = null, defaultName = "", key = null, fallback = null }) {
+    this.kind = kind; this.multi = multi; this.dirsOnly = dirsOnly; this.selectedSet = new Set(); this.key = key; this.fallback = fallback;
     $("bTitle").textContent = title; $("bNameRow").hidden = !nameRow; $("bName").value = defaultName;
     $("browser").hidden = false;
     this.load(start);
@@ -306,17 +308,30 @@ const browser = {
   },
   async load(dir) {
     try {
-      const d = await api(`/api/browse?kind=${this.dirsOnly ? "none" : this.kind}` + (dir ? `&dir=${encodeURIComponent(dir)}` : ""));
+      const d = await api(`/api/browse?kind=${this.dirsOnly ? "none" : this.kind}`
+        + (dir ? `&dir=${encodeURIComponent(dir)}` : this.key ? `&key=${encodeURIComponent(this.key)}` : "")
+        + (!dir && this.fallback ? `&fallback=${encodeURIComponent(this.fallback)}` : ""));
       this.cur = d; $("bDir").value = d.dir;
       if (d.fallback) toast(`folder not available, showing ${d.dir}`);
       const drives = $("bDrives");
       drives.innerHTML = d.drives.map((x) => `<option ${d.dir.toUpperCase().startsWith(x.toUpperCase()) ? "selected" : ""}>${x}</option>`).join("");
+      this.selectedSet = new Set(); this.anchor = null;  // a selection belongs to one folder, like in Explorer
       $("bList").innerHTML = d.dirs.map((n) => `<div class="entry dir" data-name="${esc(n)}"><span class="ic">▸</span>${esc(n)}</div>`).join("")
-        + d.files.map((f) => `<div class="entry file" data-name="${esc(f.name)}"><span class="ic">·</span>${esc(f.name)}<span class="mt">${fmtDate(f.mtime)}</span></div>`).join("");
+        + d.files.map((f, i) => `<div class="entry file" data-i="${i}" data-name="${esc(f.name)}"><span class="ic">·</span>${esc(f.name)}<span class="mt">${fmtDate(f.mtime)}</span></div>`).join("");
       this.updateCount();
     } catch (e) { toast(e.message); }
   },
-  updateCount() { $("bCount").textContent = this.multi ? `${this.selectedSet.size} selected` : ""; },
+  fileNames() { return this.cur ? this.cur.files.map((f) => f.name) : []; },
+  setSelection(names) {
+    this.selectedSet = new Set(names);
+    $("bList").querySelectorAll(".entry.file").forEach((e) => e.classList.toggle("selected", this.selectedSet.has(e.dataset.name)));
+    this.updateCount();
+  },
+  range(a, b) { const n = this.fileNames(); const [lo, hi] = a < b ? [a, b] : [b, a]; return n.slice(lo, hi + 1); },
+  updateCount() {
+    $("bCount").textContent = this.multi ? `${this.selectedSet.size} selected` : "";
+    $("bHint").hidden = !this.multi;
+  },
   pick() {
     const dir = this.cur.dir;
     if (!$("bNameRow").hidden) { const n = $("bName").value.trim(); return n ? `${dir}/${n}` : null; }
@@ -324,26 +339,64 @@ const browser = {
     const list = [...this.selectedSet].map((n) => `${dir}/${n}`);
     return this.multi ? list : list[0] || null;
   },
-  close(value) { $("browser").hidden = true; const r = this.resolve; this.resolve = null; if (r) r(value); },
+  close(value) {
+    $("browser").hidden = true;
+    if (value != null && this.key && this.cur) api("/api/browse/remember", { key: this.key, dir: this.cur.dir }).catch(() => {});
+    const r = this.resolve; this.resolve = null; if (r) r(value);
+  },
 };
 $("bList").addEventListener("click", (ev) => {
   const el = ev.target.closest(".entry"); if (!el) return;
   if (el.classList.contains("dir")) { browser.load(`${browser.cur.dir.replace(/\/$/, "")}/${el.dataset.name}`); return; }
-  if (browser.dirsOnly) return;
-  if (browser.multi) {
-    if (browser.selectedSet.has(el.dataset.name)) browser.selectedSet.delete(el.dataset.name); else browser.selectedSet.add(el.dataset.name);
-    el.classList.toggle("selected");
-  } else {
-    browser.selectedSet = new Set([el.dataset.name]);
-    $("bList").querySelectorAll(".entry.selected").forEach((e) => e.classList.remove("selected"));
-    el.classList.add("selected");
-    if (!$("bNameRow").hidden) $("bName").value = el.dataset.name;
-  }
-  browser.updateCount();
+  if (browser.dirsOnly || browser.multi) return;  // multi-select files are handled on pointerdown
+  browser.setSelection([el.dataset.name]);
+  if (!$("bNameRow").hidden) $("bName").value = el.dataset.name;
 });
+// Multi-select like Explorer: click = one, Ctrl+click = toggle, Shift+click = range from the
+// last clicked file (Ctrl+Shift adds the range), drag over files = range (Ctrl+drag adds).
+const bDrag = { active: false, start: 0, base: [] };
+$("bList").addEventListener("pointerdown", (ev) => {
+  if (!browser.multi || ev.button !== 0) return;
+  const el = ev.target.closest(".entry.file"); if (!el) return;
+  ev.preventDefault();  // no text selection while dragging (this also keeps focus where it was:
+  $("bList").focus();   // move it to the list so Ctrl+A selects files, not the path field's text)
+  const i = +el.dataset.i, name = el.dataset.name, ctrl = ev.ctrlKey || ev.metaKey;
+  if (ev.shiftKey && browser.anchor != null) {
+    browser.setSelection([...(ctrl ? browser.selectedSet : []), ...browser.range(browser.anchor, i)]);
+    return;
+  }
+  if (ctrl) {
+    const s = new Set(browser.selectedSet); if (s.has(name)) s.delete(name); else s.add(name);
+    browser.setSelection(s); browser.anchor = i;
+    Object.assign(bDrag, { active: true, start: i, base: [...s].filter((n) => n !== name), moved: false });
+    return;
+  }
+  browser.setSelection([name]); browser.anchor = i;
+  Object.assign(bDrag, { active: true, start: i, base: [], moved: false });
+});
+window.addEventListener("pointermove", (ev) => {
+  if (!bDrag.active) return;
+  if (!(ev.buttons & 1)) { bDrag.active = false; return; }
+  const list = $("bList"), r = list.getBoundingClientRect();
+  if (ev.clientY < r.top + 16) list.scrollTop -= 12; else if (ev.clientY > r.bottom - 16) list.scrollTop += 12;
+  const y = Math.min(Math.max(ev.clientY, r.top + 2), r.bottom - 2);
+  const el = document.elementFromPoint(r.left + 20, y); const f = el && el.closest("#bList .entry.file");
+  if (!f) return;
+  const i = +f.dataset.i;
+  if (i === bDrag.start && !bDrag.moved) return;
+  bDrag.moved = true;
+  browser.setSelection([...bDrag.base, ...browser.range(bDrag.start, i)]);
+});
+window.addEventListener("pointerup", () => { bDrag.active = false; });
 $("bList").addEventListener("dblclick", (ev) => {
-  const el = ev.target.closest(".entry.file"); if (!el || browser.multi) return;
+  const el = ev.target.closest(".entry.file"); if (!el) return;
+  if (browser.multi && !browser.selectedSet.has(el.dataset.name)) browser.setSelection([el.dataset.name]);
   browser.close(browser.pick());
+});
+document.addEventListener("keydown", (e) => {
+  if ($("browser").hidden || !browser.multi || !(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "a") return;
+  if (e.target.matches && e.target.matches("input, textarea, select")) return;  // Ctrl+A in the path field selects its text
+  e.preventDefault(); browser.setSelection(browser.fileNames());
 });
 $("bUp").onclick = () => browser.cur && browser.cur.parent && browser.load(browser.cur.parent);
 $("bGo").onclick = () => browser.load($("bDir").value.trim());
@@ -525,7 +578,7 @@ $("dLoadCams").onclick = async () => {
 // ---------- add scenes ----------
 $("btnAdd").onclick = () => {
   const sc = state.scenes[state.scenes.length - 1];
-  $("aTargetDir").value = sc && sc.target ? dirname(sc.target) : "";
+  $("aTargetDir").value = $("aTargetDir").dataset.prefill = sc && sc.target ? dirname(sc.target) : "";
   $("aAssets").value = "";  // never inherited from earlier scenes
   $("aFiles").value = "";
   $("aAnimBox").hidden = true; $("aAnim").checked = false; $("aFrameRow").hidden = true; animInfoFor = null;
@@ -537,7 +590,7 @@ $("btnAdd").onclick = () => {
   $("addDlg").hidden = false;
 };
 $("aBrowse").onclick = async () => {
-  const files = await browser.open({ title: "Pick scene files", kind: "scene", multi: true });
+  const files = await browser.open({ title: "Pick scene files", kind: "scene", multi: true, key: "addScenes" });
   if (files && files.length) $("aFiles").value = ($("aFiles").value.trim() ? $("aFiles").value.trim() + "\n" : "") + files.join("\n");
   updateAddAnim();
 };
@@ -573,11 +626,13 @@ function sizeFrom(onId, wId, hId) {
   return [w, h];
 }
 $("aTargetBrowse").onclick = async () => {
-  const d = await browser.open({ title: "Target folder", dirsOnly: true, start: $("aTargetDir").value || null });
+  // A folder typed into the field wins; the prefilled one (last scene's target) does not.
+  const typed = $("aTargetDir").value.trim(), edited = typed && typed !== ($("aTargetDir").dataset.prefill || "");
+  const d = await browser.open({ title: "Target folder", dirsOnly: true, key: "addTarget", start: edited ? typed : null, fallback: typed || null });
   if (d) $("aTargetDir").value = d;
 };
 $("aAssetBrowse").onclick = async () => {
-  const f = await browser.open({ title: "Pick a preset (.duf)", kind: "scene", start: dirname($("aAssets").value.split("\n")[0] || "") || null });
+  const f = await browser.open({ title: "Pick a preset (.duf)", kind: "scene", key: "addPreset" });
   if (f) $("aAssets").value = ($("aAssets").value.trim() ? $("aAssets").value.trim() + "\n" : "") + f;
 };
 $("addForm").onsubmit = async (e) => {
@@ -659,7 +714,7 @@ $("sDenoiserInstall").onclick = async () => {
   if (d) renderDenoiserState();
 };
 $("sDenoiserBrowse").onclick = async () => {
-  const f = await browser.open({ title: "Pick Denoiser.exe", kind: "exe", start: dirname($("sDenoiser").value) || null });
+  const f = await browser.open({ title: "Pick Denoiser.exe", kind: "exe", start: dirname($("sDenoiser").value) || null, key: "denoiser" });
   if (f) $("sDenoiser").value = f;
 };
 $("sAddWorker").onclick = () => {
@@ -686,7 +741,8 @@ $("sActions").addEventListener("click", async (e) => {
   const row = e.target.closest(".action-row"); if (!row) return;
   if (e.target.classList.contains("adel")) { row.remove(); equalizeSettingsTabs(); }
   else if (e.target.classList.contains("abrowse")) {
-    const d = await browser.open({ title: "Folder for the scene file", dirsOnly: true, start: row.querySelector(".afolder").value || null });
+    const cur = row.querySelector(".afolder").value.trim(), absolute = /^([a-z]:[\\/]|[\\/]{2})/i.test(cur);  // .\DONE is no place to start in
+    const d = await browser.open({ title: "Folder for the scene file", dirsOnly: true, start: absolute ? cur : null, key: "actionFolder" });
     if (d) row.querySelector(".afolder").value = d;
   }
 });

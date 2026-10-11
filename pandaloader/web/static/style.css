@@ -224,6 +224,7 @@ table.scenes td.dn input { vertical-align: middle; cursor: pointer; }
 .dialog-head h2 { margin: 0; flex: 1; font-size: 16px; }
 .browser-bar { display: flex; gap: 6px; margin-bottom: 8px; }
 .browser-list { flex: 1; min-height: 300px; max-height: 50vh; overflow: auto; border: 1px solid var(--line); border-radius: 4px; background: #151517; }
+.browser-list:focus { outline: none; }
 .browser-list .entry { display: flex; gap: 8px; padding: 4px 10px; cursor: pointer; user-select: none; }
 .browser-list .entry:hover { background: #2a2a2d; }
 .browser-list .entry.selected { background: #3a2e3a; }

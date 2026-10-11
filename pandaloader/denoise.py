@@ -4,15 +4,20 @@
     Denoiser.exe -i <in> -o <out> -hdr 0 -v 1
 
 The tool exits with 0 even on failure, so the result is judged from the
-output file. The render is denoised in place: the tool writes a temp file
-next to the target, which then replaces the target. Nothing is copied
-anywhere else.
+output file. The render is copied into a scratch folder in the work dir and
+denoised there, so no temp files appear next to the render (a synced folder
+such as Dropbox would grab and lock them). The result is then copied back over
+the render, or beside it as <name>_denoised.<ext> when the original is kept.
+Reading the render and writing the result back are retried for a while: a sync
+client typically holds a freshly written file for a few seconds.
 """
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -50,41 +55,73 @@ def denoised_path(target: str) -> Path:
     return p.with_name(f"{p.stem}{DENOISED_SUFFIX}{p.suffix}")
 
 
+LOCK_RETRY_S = 120.0  # how long a locked render (sync client, viewer) is waited for
+
+
+def _retry_io(fn, what: str, patience_s: float = LOCK_RETRY_S) -> Tuple[bool, str, int]:
+    """Run fn() until it stops raising OSError or patience runs out.
+    Returns (ok, last error, retries needed)."""
+    deadline, delay, tries = time.time() + patience_s, 0.5, 0
+    while True:
+        try:
+            fn()
+            return True, "", tries
+        except OSError as e:
+            if time.time() + delay > deadline:
+                return False, f"{what}: {e}", tries
+            tries += 1
+            time.sleep(delay)
+            delay = min(delay * 2, 8.0)
+
+
 def denoise_in_place(exe: str, target: str, timeout_s: float = 600.0, hdr: bool = False,
-                     keep_original: bool = False) -> Tuple[bool, str, float]:
-    """Denoise ``target``. Default: overwrite it (via a temp file). With
-    ``keep_original`` the result is written to <name>_denoised.<ext> and the
-    render stays untouched. Returns (ok, message, seconds)."""
+                     keep_original: bool = False, scratch_dir: Optional[str] = None,
+                     lock_patience_s: float = LOCK_RETRY_S) -> Tuple[bool, str, float]:
+    """Denoise ``target``. Default: overwrite it. With ``keep_original`` the result
+    is written to <name>_denoised.<ext> and the render stays untouched.
+    The work happens in ``scratch_dir`` (default: a folder beside the render, the
+    old behaviour). Returns (ok, message, seconds)."""
     src = Path(target)
     if not src.is_file():
         return False, f"render missing: {target}", 0.0
-    tmp = denoised_path(target) if keep_original else src.with_name(f"{src.stem}.denoise-tmp{src.suffix}")
-    if tmp.exists():
-        tmp.unlink()
-    cmd = [exe, "-i", str(src), "-o", str(tmp), "-hdr", "1" if hdr else "0", "-v", "1"]
+    final = denoised_path(target) if keep_original else src
+    work = Path(scratch_dir) if scratch_dir else src.parent
+    tag = uuid.uuid4().hex[:8]
+    w_in = work / f"{src.stem}.{tag}.in{src.suffix}"
+    w_out = work / f"{src.stem}.{tag}.out{src.suffix}"
     t0 = time.time()
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, check=False,
-                           cwd=str(Path(exe).parent), creationflags=_NO_WINDOW)
-    except subprocess.TimeoutExpired:
-        _cleanup(tmp)
-        return False, f"denoiser timed out after {int(timeout_s)} s", time.time() - t0
+        work.mkdir(parents=True, exist_ok=True)
+        ok, err, waited_in = _retry_io(lambda: shutil.copyfile(src, w_in), "could not read the render", lock_patience_s)
+        if not ok:
+            return False, err, time.time() - t0
+        cmd = [exe, "-i", str(w_in), "-o", str(w_out), "-hdr", "1" if hdr else "0", "-v", "1"]
+        t1 = time.time()
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, check=False,
+                               cwd=str(Path(exe).parent), creationflags=_NO_WINDOW)
+        except subprocess.TimeoutExpired:
+            return False, f"denoiser timed out after {int(timeout_s)} s", time.time() - t0
+        except OSError as e:
+            return False, f"denoiser could not start: {e}", time.time() - t0
+        secs = time.time() - t1
+        out = (r.stdout or "") + (r.stderr or "")
+        if not w_out.is_file() or w_out.stat().st_size == 0:
+            err = next((ln.split("|", 1)[-1].strip() for ln in out.splitlines() if "ERROR" in ln), "").strip()
+            return False, f"denoiser produced no output{': ' + err if err else ''} (exit {r.returncode})", secs
+        ok, err, waited_out = _retry_io(lambda: shutil.copyfile(w_out, final), "could not write the result", lock_patience_s)
+        if not ok:
+            return False, err + " (the render is unchanged)", secs
+        waits = waited_in + waited_out
+        note = f", waited for a locked file ({waits} retries)" if waits else ""
+        if keep_original:
+            return True, f"denoised in {secs:.1f} s -> {final.name} (original kept){note}", secs
+        return True, f"denoised in {secs:.1f} s (replaced in place){note}", secs
     except OSError as e:
-        return False, f"denoiser could not start: {e}", time.time() - t0
-    secs = time.time() - t0
-    out = (r.stdout or "") + (r.stderr or "")
-    if not tmp.is_file() or tmp.stat().st_size == 0:
-        _cleanup(tmp)
-        err = next((ln.split("|", 1)[-1].strip() for ln in out.splitlines() if "ERROR" in ln), "").strip()
-        return False, f"denoiser produced no output{': ' + err if err else ''} (exit {r.returncode})", secs
-    if keep_original:
-        return True, f"denoised in {secs:.1f} s -> {tmp.name} (original kept)", secs
-    try:
-        os.replace(tmp, src)
-    except OSError as e:
-        _cleanup(tmp)
-        return False, f"could not replace the render: {e}", secs
-    return True, f"denoised in {secs:.1f} s (replaced in place)", secs
+        return False, f"denoise failed: {e}", time.time() - t0
+    finally:
+        _cleanup(w_in)
+        _cleanup(w_out)
 
 
 def _cleanup(p: Path) -> None:

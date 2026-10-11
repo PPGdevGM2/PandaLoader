@@ -324,7 +324,7 @@ def cmd_tray(args) -> int:
         return 1
     app = TrayApp(manager, server, manager.cfg.web_host)
     _check_nvidia_smi(manager)
-    if args.open or manager.first_run:  # first start: show the page and its setup checklist
+    if not args.no_browser:  # every fresh start shows the page (a second launch shows it too, see above)
         server.open_browser()
     try:
         app.run()  # blocks on the main thread until Quit
@@ -414,7 +414,8 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("--config")
     tr.add_argument("--port", type=int)
     tr.add_argument("--host")
-    tr.add_argument("--open", action="store_true", help="open the browser at start")
+    tr.add_argument("--open", action="store_true", help="(default now) open the browser at start")
+    tr.add_argument("--no-browser", action="store_true", help="do not open the browser at start")
     tr.add_argument("-v", "--verbose", action="store_true")
     tr.set_defaults(func=cmd_tray)
 

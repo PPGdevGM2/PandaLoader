@@ -172,9 +172,10 @@
       <button id="bUp" title="Parent folder">↑</button>
       <button id="bGo">Go</button>
     </div>
-    <div class="browser-list" id="bList"></div>
+    <div class="browser-list" id="bList" tabindex="-1"></div>
     <div class="browser-foot">
       <label id="bNameRow" hidden>File name <input id="bName" type="text" class="mono"></label>
+      <span id="bHint" class="hint" hidden>Ctrl/Shift+click or drag to pick several, Ctrl+A for all</span>
       <span class="spacer"></span>
       <span id="bCount"></span>
       <button data-close>Cancel</button>

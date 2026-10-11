@@ -41,8 +41,10 @@ class Manager:
         self.scheduler: Optional[Scheduler] = None
         self._state_file = Path(cfg.work_dir) / "manager-state.json"
         self.recent: List[str] = []
+        self.browse_dirs: dict = {}  # last folder confirmed in each file picker, by picker key
         self._mtime_cache: dict = {}
         self.on_port_change: Optional[Callable[[int], None]] = None  # set by the host (tray/serve) to rebind
+        self.on_quit: Optional[Callable[[], None]] = None  # set by the tray: a clean exit, like its Quit item
         self.shutdown_at: Optional[float] = None  # epoch seconds of a pending PC shutdown
         self._denoiser_install: Optional[dict] = None  # {"phase", "fraction", "error", "done"} while/after installing
         self.first_run = False  # set by the host when no config.json existed at start
@@ -61,6 +63,9 @@ class Manager:
             log.info("no manager state restored: %s", e)
             return
         self.recent = [p for p in d.get("recent", []) if Path(p).exists()]
+        dirs = d.get("browseDirs")
+        if isinstance(dirs, dict):
+            self.browse_dirs = {str(k): str(v) for k, v in dirs.items() if v}
         last = d.get("lastQueue")
         if last and not self._restore_queue(last):
             self._last_queue_pending = last
@@ -95,6 +100,7 @@ class Manager:
             self._state_file.write_text(json.dumps({
                 "lastQueue": str(self.queue.path) if self.queue and self.queue.path else None,
                 "recent": self.recent[:12],
+                "browseDirs": self.browse_dirs,
             }, indent=2), encoding="utf-8")
         except OSError:
             log.exception("could not save manager state")
@@ -616,10 +622,24 @@ class Manager:
             self.save_config()
 
     # -- browsing / lookups --------------------------------------------------------
-    def browse(self, directory: Optional[str], kind: str = "scene") -> dict:
-        """List a folder for the file picker. Any folder that cannot be used
-        (missing, a file, unreadable, unreachable drive, garbage text) silently
-        falls back to the user's Documents folder."""
+    def remember_browse(self, key: str, directory: str) -> None:
+        """A picker was confirmed in this folder: its next opening starts there."""
+        key = str(key or "").strip()
+        if not key or not directory:
+            return
+        d = Path(directory)
+        if d.is_file():
+            d = d.parent
+        with self.lock:
+            self.browse_dirs[key] = d.as_posix()
+            self._save_state()
+
+    def browse(self, directory: Optional[str], kind: str = "scene", key: Optional[str] = None,
+               fallback: Optional[str] = None) -> dict:
+        """List a folder for the file picker. Without a folder, a picker with a key starts
+        in its own last confirmed folder (when it still exists), else in `fallback`, else
+        in the default. Any folder that cannot be used (missing, a file, unreadable,
+        unreachable drive, garbage text) silently falls back to the user's Documents folder."""
         requested = directory
         try:
             d = Path(directory) if directory else self._default_browse_dir(kind)
@@ -635,6 +655,14 @@ class Manager:
             except (OSError, ValueError):
                 d = Path.home()
                 listing = self._list_dir(d, kind)
+        if not directory:
+            for cand in (self.browse_dirs.get(key) if key else None, fallback):
+                try:
+                    if cand and Path(cand).is_dir():
+                        directory = cand
+                        break
+                except (OSError, ValueError):
+                    pass
         dirs, files = listing
         parent = d.parent if d.parent != d else None
         return {"dir": d.as_posix(), "parent": parent.as_posix() if parent else None, "dirs": dirs, "files": files,
