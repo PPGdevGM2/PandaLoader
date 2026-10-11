@@ -54,15 +54,39 @@ class Manager:
 
     # -- persistence of the manager's own little state ------------------------
     def _load_state(self) -> None:
+        self._last_queue_pending: Optional[str] = None  # last queue not reachable yet (Dropbox/drive not up)
         try:
             d = json.loads(self._state_file.read_text(encoding="utf-8"))
-            self.recent = [p for p in d.get("recent", []) if Path(p).exists()]
-            last = d.get("lastQueue")
-            if last and Path(last).exists():
-                self.queue = QueueFile.load(last)
-                self.status.set_queue(Path(last).as_posix(), self.queue.counts(), self.queue.average_secs())
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as e:
+            log.info("no manager state restored: %s", e)
+            return
+        self.recent = [p for p in d.get("recent", []) if Path(p).exists()]
+        last = d.get("lastQueue")
+        if last and not self._restore_queue(last):
+            self._last_queue_pending = last
+            self.status.log(f"last queue not reachable yet, waiting for it: {last}", level="warning")
+
+    def _restore_queue(self, path: str) -> bool:
+        """Reopen the queue used last time. False if the file is not there (yet) or unreadable."""
+        try:
+            if not Path(path).is_file():
+                return False
+            self.queue = QueueFile.load(path)
+            self.status.set_queue(Path(path).as_posix(), self.queue.counts(), self.queue.average_secs())
+            self.status.log(f"reopened {Path(path).name}: {self.queue.counts()}")
+            log.info("reopened last queue %s", path)
+            return True
+        except (OSError, ValueError) as e:
+            log.warning("could not reopen last queue %s: %s", path, e)
+            self.status.log(f"could not reopen {path}: {e}", level="error")
+            return False
+
+    def _retry_last_queue(self) -> None:
+        """Called on every snapshot: a queue on a drive that was not mounted at start (Dropbox,
+        network share) is picked up as soon as it appears, until the user opens something else."""
+        if self._last_queue_pending and self.queue is None and Path(self._last_queue_pending).is_file():
+            path, self._last_queue_pending = self._last_queue_pending, None
+            self._restore_queue(path)
 
     def _save_state(self) -> None:
         try:
@@ -671,6 +695,7 @@ class Manager:
     # -- snapshot for the UI -------------------------------------------------------
     def snapshot(self) -> dict:
         with self.lock:
+            self._retry_last_queue()
             snap = self.status.snapshot()
             snap["running"] = self.running
             snap["firstRun"] = self.first_run
@@ -753,10 +778,6 @@ def _gpus() -> list:
     return gpumon.gpus()
 
 
-def _drives() -> list:
-    if os.name != "nt":
-        return ["/"]
-    return [f"{c}:/" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if Path(f"{c}:/").exists()]
 def documents_dir() -> Path:
     """The user's Documents folder (Windows known folder), falling back to the home dir."""
     if os.name == "nt":
@@ -773,3 +794,7 @@ def documents_dir() -> Path:
     return d if d.is_dir() else Path.home()
 
 
+def _drives() -> list:
+    if os.name != "nt":
+        return ["/"]
+    return [f"{c}:/" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if Path(f"{c}:/").exists()]

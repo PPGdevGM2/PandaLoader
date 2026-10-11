@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import dufinfo
+from . import __version__, dufinfo
 from .config import Config, WorkerSlot
 from .queuefile import QueueFile
 from .scheduler import Scheduler
@@ -50,8 +50,14 @@ def _load_config(args) -> Config:
 
 
 def _setup_logging(cfg: Config, verbose: bool) -> None:
-    Path(cfg.work_dir).mkdir(parents=True, exist_ok=True)
-    handlers = [logging.FileHandler(Path(cfg.work_dir) / "pandaloader.log", encoding="utf-8")]
+    handlers = []
+    for folder in (Path(cfg.work_dir), Path(os.environ.get("TEMP") or ".")):
+        try:  # the work dir first; if it cannot be written, the temp folder rather than silence
+            folder.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.FileHandler(folder / "pandaloader.log", encoding="utf-8"))
+            break
+        except OSError:
+            continue
     if verbose:
         handlers.append(logging.StreamHandler(sys.stderr))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", handlers=handlers)
@@ -187,12 +193,25 @@ def _start_app(args):
     from .manager import Manager
     from .web import WebServer
     cfg_path = Path(args.config) if args.config else Path(Config().work_dir) / "config.json"
-    cfg = Config.load(cfg_path) if cfg_path.exists() else Config()
+    cfg_exists = cfg_path.is_file()
+    if cfg_exists:
+        try:
+            cfg = Config.load(cfg_path)
+        except (OSError, ValueError) as e:
+            # Never run on defaults while a config exists: that would look like "everything reset".
+            raise RuntimeError(f"Config could not be read:\n{cfg_path}\n\n{e}\n\n"
+                               f"Fix or delete the file, then start PandaLoader again.")
+    else:
+        cfg = Config()
     if getattr(args, "port", None):
         cfg.web_port = int(args.port)
     if getattr(args, "host", None):
         cfg.web_host = args.host
     _setup_logging(cfg, args.verbose)
+    log = logging.getLogger("pandaloader")
+    log.info("PandaLoader %s starting; config %s (%s): workers %s, denoiser %r, work dir %s",
+             __version__, cfg_path, "loaded" if cfg_exists else "not found, defaults",
+             [(w.name, w.gpu_text, w.enabled) for w in cfg.workers], cfg.denoiser_exe, cfg.work_dir)
     existing = _running_instance(cfg.web_port)
     if existing:
         raise AlreadyRunning(existing)
@@ -210,7 +229,7 @@ def _start_app(args):
                 raise AlreadyRunning(existing)
         raise RuntimeError(f"Port {cfg.web_port} is in use by another program ({e.strerror or e}).\n"
                            f"Change the port with: PandaLoader.exe --port <number>")
-    first_run = not cfg_path.exists()
+    first_run = not cfg_exists
     manager = Manager(cfg, cfg_path)
     manager.first_run = first_run
     if first_run:
