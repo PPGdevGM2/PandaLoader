@@ -283,8 +283,35 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def _escape_container(args) -> bool:
+    """True when this process must not go on: it was started inside another app's
+    container (its AppData writes would land in that app's private folder) and has
+    either been restarted outside it or told the user how to start it properly."""
+    from . import sandbox
+    work = Path(args.config).parent if args.config else Path(Config().work_dir)
+    exe_dir = Path(sys.executable).parent
+    redirected = sandbox.redirected_folder(work)
+    if not redirected:
+        try:
+            (exe_dir / ".pandaloader-relaunch").unlink()
+        except OSError:
+            pass
+        return False
+    if sandbox.relaunch_outside(exe_dir):
+        return True
+    owner = sandbox.container_name(redirected)
+    _message_box(f"PandaLoader was started from inside another app{f' ({owner})' if owner else ''}.\n\n"
+                 f"Its settings and queue state would be saved in that app's private folder:\n{redirected}\n"
+                 f"instead of:\n{work}\n\n"
+                 f"and would look reset the next time PandaLoader is started normally.\n\n"
+                 f"Start PandaLoader.exe from Explorer or the Start Menu instead.")
+    return True
+
+
 def cmd_tray(args) -> int:
     import webbrowser
+    if _escape_container(args):
+        return 0
     try:
         from .tray import TrayApp
         manager, server = _start_app(args)
