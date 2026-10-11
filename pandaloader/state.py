@@ -34,6 +34,7 @@ class WorkerStatus:
     frames_done: int = 0                # finished within this job
     frame: Optional[int] = None         # frame being rendered
     frame_first: Optional[int] = None   # first frame of this job's block
+    phase_text: str = ""                # detail for post-render work, e.g. "encoding webm (2/3)"
 
     def eta_s(self, startup_overhead: float, now: Optional[float] = None) -> Optional[float]:
         """Estimated seconds until this job finishes, or None when idle."""
@@ -58,6 +59,7 @@ class WorkerStatus:
             "eta": self.eta_s(startup_overhead, now), "pid": self.pid, "lastError": self.last_error,
             "jobsDone": self.jobs_done, "jobsFailed": self.jobs_failed,
             "frames": self.frames, "framesDone": self.frames_done, "frame": self.frame, "frameFirst": self.frame_first,
+            "phaseText": self.phase_text,
         }
 
 
@@ -104,6 +106,7 @@ class Status:
             ws.pid = None
             ws.frames = ws.frames_done = 0
             ws.frame = ws.frame_first = None
+            ws.phase_text = ""
 
     def set_queue(self, path: str, counts: dict, average_secs: Optional[float]) -> None:
         with self._lock:

@@ -220,25 +220,45 @@ class Scheduler:
                 self.queue.append_log(f"{slot.name}: {'denoised' if ok else 'DENOISE FAILED'} {scene.name} (existing render): {msg}")
                 st.log(f"{scene.name}: {msg}", level="info" if ok else "warning", worker=slot.name)
         with self.qlock:
-            self._run_actions(slot, scene)
             self._save("after post-render work")
+        self._run_actions(slot, scene)
         st.worker_idle(slot.name)
 
     def _run_actions(self, slot: WorkerSlot, scene: Scene) -> None:
-        """Run the scene's pending "Action when done" entries, in the order selected.
-        Called under the queue lock once the scene is done (and denoised)."""
-        from .actions import run_action
-        stock = {a["id"]: a for a in self.cfg.actions}
-        for aid in scene.pending_actions():
+        """Run the scene's pending "Action when done" entries, in the order selected, once
+        the scene is done (and denoised). Must be called WITHOUT the queue lock: a video
+        encode takes minutes. The scene is claimed meanwhile so no other worker starts
+        the same actions; each result is booked and saved under the lock as it comes."""
+        from .actions import ActionContext, run_action
+        with self.qlock:
+            self._denoise_claimed.add(scene.index)
+            stock = {a["id"]: a for a in self.cfg.actions}
+            pending = list(scene.pending_actions())
+        if not pending:
+            return
+        ctx = ActionContext(ffmpeg_exe=self.cfg.ffmpeg_exe, denoise_keep_original=self.cfg.denoise_keep_original,
+                            stop=self._stop,
+                            progress=lambda text: self.status.update_worker(slot.name, phase_text=text))
+        for aid in pending:
+            if self._stop.is_set():
+                break  # the rest stays pending and runs at the next Render
             action = stock.get(aid)
             if action is None:
                 ok, msg = False, "action no longer exists in Settings > Actions"
                 label = aid
             else:
                 label = action.get("label") or aid
-                ok, msg = run_action(action, scene)
-            scene.mark_action(aid, ok)
-            self.queue.append_log(f"{slot.name}: {'action' if ok else 'ACTION FAILED'} '{label}' for {scene.name}: {msg}")
+                self.status.update_worker(slot.name, state="finishing", scene_index=scene.index, scene_name=scene.name,
+                                          phase_text=label)
+                self.status.log(f"{scene.name}: {label}...", worker=slot.name)
+                ok, msg = run_action(action, scene, ctx)
+            if not ok and self._stop.is_set() and msg.startswith("stopped"):
+                self.status.log(f"{scene.name}: {label}: stopped; runs again at the next Render", level="warning", worker=slot.name)
+                break
+            with self.qlock:
+                scene.mark_action(aid, ok)
+                self.queue.append_log(f"{slot.name}: {'action' if ok else 'ACTION FAILED'} '{label}' for {scene.name}: {msg}")
+                self._save("after an action")
             self.status.log(f"{scene.name}: {label}: {msg}", level="info" if ok else "warning", worker=slot.name)
 
     def _run_one(self, slot: WorkerSlot, scene: Scene, block: Optional[List[int]] = None) -> None:
@@ -348,6 +368,7 @@ class Scheduler:
         ws = st.workers[slot.name]
         attempt = self._attempts[scene.index]
         denoise_note = None
+        run_post = False
         if result is not None and result.ok and scene.denoise and spec is not None:
             denoise_note = self._denoise(slot, scene, spec.target)
         with self.qlock:
@@ -365,7 +386,7 @@ class Scheduler:
                     scene.mark_denoised(ok)
                     self.queue.append_log(f"{slot.name}: {'denoised' if ok else 'DENOISE FAILED'} {scene.name}: {msg}")
                     st.log(f"{scene.name}: {msg}", level="info" if ok else "warning", worker=slot.name)
-                self._run_actions(slot, scene)
+                run_post = True  # actions run below, outside the lock
             elif self._stop.is_set() or (result is not None and result.killed and "stopped" in result.reason):
                 scene.mark_pending()
                 self.queue.append_log(f"{slot.name}: stopped during {scene.name}; back to pending")
@@ -385,6 +406,8 @@ class Scheduler:
             if result is not None and not result.ok and result.log_tail:
                 log.warning("%s log tail for %s:\n%s", slot.name, scene.name, "\n".join(result.log_tail[-15:]))
             self._save()
+        if run_post:
+            self._run_actions(slot, scene)
         st.worker_idle(slot.name)
 
     def _finish_block(self, slot: WorkerSlot, scene: Scene, result: Optional[JobResult], reason: str,
@@ -396,6 +419,7 @@ class Scheduler:
         frames_ok = list(result.frames_ok) if result is not None else []
         failed = [f for f in block if f not in frames_ok]
         denoise_note = None
+        run_post = False
         if frames_ok and scene.denoise and spec is not None:
             files = [t for f, t in zip(spec.frames, spec.frame_targets) if f in frames_ok]
             denoise_note = self._denoise_files(slot, scene, files)
@@ -425,7 +449,7 @@ class Scheduler:
                     scene.mark_denoised(scene.index not in self._anim_denoise_fail)
                 self.queue.append_log(f"{slot.name}: done {scene.name}: all {len(scene.frames)} frames -> {Path(scene.target).parent}")
                 st.log(f"done {scene.name}: all {len(scene.frames)} frames", worker=slot.name)
-                self._run_actions(slot, scene)
+                run_post = True  # actions run below, outside the lock
             elif failed:
                 stopped = self._stop.is_set() or (result is not None and result.killed and "stopped" in result.reason)
                 if stopped:
@@ -453,6 +477,8 @@ class Scheduler:
             if result is not None and not result.ok and result.log_tail:
                 log.warning("%s log tail for %s:\n%s", slot.name, scene.name, "\n".join(result.log_tail[-15:]))
             self._save()
+        if run_post:
+            self._run_actions(slot, scene)
         st.worker_idle(slot.name)
 
     def _denoise_files(self, slot: WorkerSlot, scene: Scene, files: List[str]):

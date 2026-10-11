@@ -14,14 +14,15 @@ Web UI on port 6969 by default, tray icon for quick actions.
 5. **DAZ path.** *Settings → General → DAZ Studio executable* must point at `DAZStudio.exe` when DAZ is not in the default Program Files folder. The same content library mapping as on the working PC is needed, or scenes load with missing assets.
 6. **nvidia-smi** comes with the NVIDIA driver. Without it PandaLoader warns at start and shows no GPU gauges; rendering still works.
 7. **Denoise (optional).** *Settings → Denoiser → Install* downloads [Denoiser OI](https://github.com/DeclanRussell/IntelOIDenoiser) into the work dir.
-8. Open a queue (`.rq.json`) or create a new one, add scenes, press **Render**.
+8. **Videos from animations (optional).** A *Make video* action (*Settings → Actions*) turns the finished frames into `.ts` (MPEG-2 master), `.webm` (VP9) and/or `.gif` with [ffmpeg](https://ffmpeg.org/), optionally ping-pong looped. Set the path to `ffmpeg.exe` there; PandaLoader does not search for it.
+9. Open a queue (`.rq.json`) or create a new one, add scenes, press **Render**.
 
 ## Tested with
 
 DAZ Studio 6.25 (Iray) on Windows 10/11 with NVIDIA GPUs. The log parsing, the per-instance
 log folder (`%APPDATA%\DAZ 3D\Studio6 [<worker>]`) and the headless flags were verified against
 that build; if a later DAZ changes them, those are the first things to check.
-Denoising was tested with Denoiser OI 1.6.
+Denoising was tested with Denoiser OI 1.6, videos with ffmpeg 5.1.2 (gyan.dev full build).
 
 ## Files
 

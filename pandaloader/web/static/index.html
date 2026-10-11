@@ -288,6 +288,10 @@
           each runs once after the render (and after the denoise). Actions added to an already finished scene run at the next Render.</p>
         <div id="sActions"></div>
         <button type="button" id="sAddAction">+ action</button>
+        <label class="ffmpeg-path">ffmpeg executable (for "Make video" actions)
+          <span class="row"><input id="sFfmpeg" type="text" class="mono grow" placeholder="path to ffmpeg.exe"><button type="button" id="sFfmpegBrowse">Browse…</button></span>
+          <span class="hint" id="sFfmpegState"></span>
+        </label>
       </div>
       <div class="stab setup" data-stab="setup" hidden>
         <p class="hint">First-run checklist for a fresh PC. Everything here is a one-time step.</p>

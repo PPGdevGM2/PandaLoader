@@ -241,9 +241,17 @@ table.scenes td.dn input { vertical-align: middle; cursor: pointer; }
 .boxbody { margin: 4px 0 0 22px; }
 .actionlist label.check { margin: 3px 0; }
 .actionlist .hint.empty { display: block; margin: 2px 0; }
-.action-row { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+.action-row { margin: 6px 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; }
+.action-row .ahead, .action-row .aparams { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.action-row .aparams { margin-top: 6px; }
+.form .action-row .aparams label { display: inline-flex; flex-direction: row; gap: 4px; align-items: center; margin: 0 6px 0 0; }
+.action-row .aparams input.afps, .action-row .aparams input.aheight { width: 72px; }
 .action-row input.alabel { width: 160px; }
-.action-row input.afolder { flex: 1; }
+.action-row input.afolder { flex: 1; min-width: 220px; }
+.ffmpeg-path { display: block; margin-top: 14px; }
+.hint.warn { color: var(--warn); }
+.phase.finishing { color: var(--warn); }
+.worker.finishing .bar i { background: var(--warn); }
 .actok { color: var(--ok, #7fd97f); margin-left: 4px; }
 .actfail { color: var(--err); margin-left: 4px; }
 .actbadge { margin-left: 6px; font-size: 11px; color: var(--muted); }

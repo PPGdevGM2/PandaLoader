@@ -187,7 +187,7 @@ function workerCard(w) {
   return `<div class="worker ${st}">
     <div class="head"><span class="wname">${esc(w.name)}</span><span class="gpu">${gpu}</span><span class="phase ${st}">${st}</span>${gaugeToggle(w)}</div>
     <div class="body"><div class="main">
-    <div class="scene">${esc(w.sceneName)}${w.frames ? ` <span class="hint">frame ${w.frame} · ${w.framesDone}/${w.frames} of this block</span>` : ""}<span class="cam">${esc(w.camera || "")}</span></div>
+    <div class="scene">${esc(w.sceneName)}${w.phaseText ? ` <span class="hint">${esc(w.phaseText)}</span>` : w.frames ? ` <span class="hint">frame ${w.frame} · ${w.framesDone}/${w.frames} of this block</span>` : ""}<span class="cam">${esc(w.camera || "")}</span></div>
     <div class="bar"><i style="width:${(frac * 100).toFixed(1)}%"></i></div>
     <div class="stats">
       <span>iterations <b>${Math.round(w.iterations)}</b></span>
@@ -610,7 +610,7 @@ async function updateAddAnim() {
     if (animInfoFor !== files[0]) return;
     $("aAnim").disabled = false;
     $("aAnimHint").textContent = `${info.changing} of ${info.tracks} tracks change over the play range ${info.frameFirst}-${info.frameLast} at ${info.fps} fps`;
-    $("aFrameFirst").value = info.frameFirst; $("aFrameLast").value = info.frameLast;
+    $("aFrameFirst").value = info.frameFirst; $("aFrameLast").value = info.frameLast; $("aAnim").dataset.fps = info.fps || "";
     $("aFrameHint").textContent = `${info.frameLast - info.frameFirst + 1} frames, files <scene>_NN.png`;
     $("aAnim").checked = false; $("aFrameRow").hidden = true;
   } catch (e) { if (animInfoFor === files[0]) { $("aAnimHint").textContent = `timeline not readable: ${e.message}`; $("aAnim").disabled = true; } }
@@ -639,7 +639,7 @@ $("addForm").onsubmit = async (e) => {
   e.preventDefault();
   const files = $("aFiles").value.split("\n").map((s) => s.trim()).filter(Boolean);
   if (!files.length) { toast("no scene files"); return; }
-  const anim = files.length === 1 && !$("aAnimBox").hidden && $("aAnim").checked ? { frameFirst: Number($("aFrameFirst").value), frameLast: Number($("aFrameLast").value) } : null;
+  const anim = files.length === 1 && !$("aAnimBox").hidden && $("aAnim").checked ? { frameFirst: Number($("aFrameFirst").value), frameLast: Number($("aFrameLast").value), fps: Number($("aAnim").dataset.fps) || null } : null;
   let imageSize = null;
   try { imageSize = sizeFrom("aSizeOn", "aWidth", "aHeight"); } catch (e2) { toast(e2.message); return; }
   const d = await act("/api/scenes/add", { files, targetDir: $("aTargetDir").value.trim() || null, postLoaders: $("aAssets").value.split("\n").map((s) => s.trim()).filter(Boolean), atTop: $("aTop").checked, anim, imageSize, ...whenDone("a") });
@@ -661,6 +661,7 @@ $("btnSettings").onclick = () => {
   document.querySelectorAll("input[name=sMode]").forEach((r) => (r.checked = r.value === (c.mode || "parallel")));
   document.querySelectorAll("input[name=sAnim]").forEach((r) => (r.checked = r.value === (c.animSplit ? "split" : "whole")));
   $("sActions").innerHTML = (c.actions || []).map(actionRowHtml).join("");
+  $("sFfmpeg").value = c.ffmpegExe || ""; renderFfmpegState();
   document.querySelectorAll("input[data-note]").forEach((cb) => (cb.checked = (c.notifications || {})[cb.dataset.note] !== false));
   $("sTimeout").value = c.jobTimeoutS; $("sStall").value = c.stallTimeoutS; $("sAttempts").value = c.maxAttempts;
   $("sDaz").value = c.dazExe; $("sPort").value = c.webPort;
@@ -725,27 +726,68 @@ $("sAddWorker").onclick = () => {
 $("sWorkers").addEventListener("click", (e) => { if (e.target.classList.contains("wdel")) { e.target.closest(".worker-row").remove(); equalizeSettingsTabs(); } });
 
 // ---------- action stock (Settings > Actions) and per-scene "Action when done" ----------
-const ACTION_TYPES = { move_scene: "Move the scene file to folder" };
+const ACTION_TYPES = { move_scene: "Move the scene file to folder", video: "Make video from the frames (ffmpeg)" };
+const ACTION_DEFAULTS = { move_scene: { folder: "" }, video: { fps: "", height: "1080", formats: "ts,webm,gif", pingpong: "", folder: "" } };
+function actionParamsHtml(type, p) {
+  p = { ...ACTION_DEFAULTS[type], ...(p || {}) };
+  const folder = (ph) => `<input type="text" class="afolder mono" value="${esc(p.folder || "")}" placeholder="${ph}"><button type="button" class="abrowse" title="Pick a folder">…</button>`;
+  if (type === "video") {
+    const fm = new Set((p.formats || "").split(","));
+    const box = (f) => `<label class="check"><input type="checkbox" class="afmt" value="${f}" ${fm.has(f) ? "checked" : ""}> ${f}</label>`;
+    return `<label title="Empty: the scene's own frame rate">fps <input type="text" class="afps" value="${esc(p.fps)}" placeholder="scene" size="5"></label>
+      <label title="Scaled to this height, width follows. Empty: original size">height <input type="text" class="aheight" value="${esc(p.height)}" placeholder="original" size="6"></label>
+      ${["ts", "webm", "gif"].map(box).join("")}
+      <label class="check" title="Append the clip reversed, for a seamless loop"><input type="checkbox" class="apingpong" ${p.pingpong ? "checked" : ""}> ping-pong</label>
+      ${folder("output folder: empty = next to the frames, .\\VIDEO = next to the frames' folder")}`;
+  }
+  return folder("folder: absolute, or .\\DONE = a DONE folder next to the scene's folder");
+}
+function actionRowParams(r) {
+  const v = (cls) => { const el = r.querySelector(cls); return el ? el.value.trim() : ""; };
+  if (r.querySelector(".atype").value === "video")
+    return { fps: v(".afps"), height: v(".aheight"), formats: [...r.querySelectorAll(".afmt:checked")].map((c) => c.value).join(","),
+      pingpong: r.querySelector(".apingpong").checked ? "1" : "", folder: v(".afolder") };
+  return { folder: v(".afolder") };
+}
 function actionRowHtml(a) {
   const opts = Object.entries(ACTION_TYPES).map(([v, t]) => `<option value="${v}" ${a.type === v ? "selected" : ""}>${t}</option>`).join("");
-  return `<div class="action-row" data-id="${esc(a.id)}"><input type="text" class="alabel" value="${esc(a.label || "")}" placeholder="name (optional)">
-    <select class="atype">${opts}</select><input type="text" class="afolder mono" value="${esc((a.params || {}).folder || "")}" placeholder="folder: absolute, or .\\DONE = a DONE folder next to the scene's folder">
-    <button type="button" class="abrowse" title="Pick a folder">…</button><button type="button" class="adel" title="Remove from the stock">✕</button></div>`;
+  return `<div class="action-row" data-id="${esc(a.id)}"><div class="ahead"><input type="text" class="alabel" value="${esc(a.label || "")}" placeholder="name (optional)">
+    <select class="atype">${opts}</select><span class="spacer"></span><button type="button" class="adel" title="Remove from the stock">✕</button></div>
+    <div class="aparams">${actionParamsHtml(a.type, a.params)}</div></div>`;
 }
 $("sAddAction").onclick = () => {
   const id = Array.from(crypto.getRandomValues(new Uint8Array(4))).map((b) => b.toString(16).padStart(2, "0")).join("");
-  $("sActions").insertAdjacentHTML("beforeend", actionRowHtml({ id, type: "move_scene", label: "", params: { folder: "" } }));
+  $("sActions").insertAdjacentHTML("beforeend", actionRowHtml({ id, type: "move_scene", label: "", params: {} }));
   equalizeSettingsTabs();
 };
+$("sActions").addEventListener("change", (e) => {
+  if (!e.target.classList.contains("atype")) return;
+  e.target.closest(".action-row").querySelector(".aparams").innerHTML = actionParamsHtml(e.target.value, {});
+  equalizeSettingsTabs();
+});
 $("sActions").addEventListener("click", async (e) => {
   const row = e.target.closest(".action-row"); if (!row) return;
   if (e.target.classList.contains("adel")) { row.remove(); equalizeSettingsTabs(); }
   else if (e.target.classList.contains("abrowse")) {
     const cur = row.querySelector(".afolder").value.trim(), absolute = /^([a-z]:[\\/]|[\\/]{2})/i.test(cur);  // .\DONE is no place to start in
-    const d = await browser.open({ title: "Folder for the scene file", dirsOnly: true, start: absolute ? cur : null, key: "actionFolder" });
+    const video = row.querySelector(".atype").value === "video";
+    const d = await browser.open({ title: video ? "Folder for the videos" : "Folder for the scene file", dirsOnly: true,
+      start: absolute ? cur : null, key: video ? "videoFolder" : "actionFolder" });
     if (d) row.querySelector(".afolder").value = d;
   }
 });
+function renderFfmpegState() {
+  const c = state.config, typed = $("sFfmpeg").value.trim();
+  const el = $("sFfmpegState");
+  if (typed !== (c.ffmpegExe || "")) { el.textContent = "checked when saved"; el.className = "hint"; return; }
+  el.textContent = c.ffmpegFound ? "found" : typed ? "not found: video actions will fail" : "not set: video actions will fail";
+  el.className = c.ffmpegFound ? "hint" : "hint warn";
+}
+$("sFfmpeg").addEventListener("input", renderFfmpegState);
+$("sFfmpegBrowse").onclick = async () => {
+  const f = await browser.open({ title: "Pick ffmpeg.exe", kind: "exe", start: dirname($("sFfmpeg").value) || null, key: "ffmpeg" });
+  if (f) { $("sFfmpeg").value = f; renderFfmpegState(); }
+};
 // Per-scene selection: only the chosen actions are listed; a small dropdown adds one.
 function actionListHtml(ids, done) {
   const stock = state.config.actions || [], byId = Object.fromEntries(stock.map((a) => [a.id, a]));
@@ -794,7 +836,8 @@ $("settingsForm").onsubmit = async (e) => {
   if (animEl) body.animSplit = animEl.value === "split";
   body.actions = [...$("sActions").querySelectorAll(".action-row")].map((r) => ({
     id: r.dataset.id, type: r.querySelector(".atype").value, label: r.querySelector(".alabel").value.trim(),
-    params: { folder: r.querySelector(".afolder").value.trim() } }));
+    params: actionRowParams(r) }));
+  body.ffmpegExe = $("sFfmpeg").value.trim();
   const newPort = body.webPort !== state.config.webPort ? body.webPort : null;
   const d = await act("/api/settings", body, "settings saved");
   if (d) {

@@ -307,6 +307,10 @@ class Manager:
             if b < a:
                 raise ManagerError("last frame must not be before the first frame")
             anim_range = (a, b)
+        try:  # the timeline's frame rate, for "Make video" actions (PandaLoader addition to the entry)
+            anim_fps = float(anim.get("fps") or 0) if anim_range else 0.0
+        except (TypeError, ValueError):
+            anim_fps = 0.0
         with self.lock, self._qlock():
             q = self._require_queue()
             if post_loaders is None:
@@ -324,6 +328,8 @@ class Manager:
                 if anim_range:
                     sc = q.add_scene(p.as_posix(), target, post_loaders, denoise=denoise, anim=True,
                                      frame_first=anim_range[0], frame_last=anim_range[1])
+                    if anim_fps > 0:
+                        sc.data["fps"] = anim_fps
                 else:
                     sc = q.add_scene(p.as_posix(), target, post_loaders, denoise=denoise)
                 if size:
@@ -539,8 +545,16 @@ class Manager:
                         daz_exe: Optional[str] = None, web_port: Optional[int] = None,
                         mode: Optional[str] = None, notifications: Optional[dict] = None,
                         denoiser_exe: Optional[str] = None, denoise_keep_original: Optional[bool] = None,
-                        anim_split: Optional[bool] = None, actions: Optional[list] = None) -> None:
+                        anim_split: Optional[bool] = None, actions: Optional[list] = None,
+                        ffmpeg_exe: Optional[str] = None) -> None:
         with self.lock:
+            if ffmpeg_exe is not None and ffmpeg_exe.strip() != self.cfg.ffmpeg_exe:
+                from .video import resolve_ffmpeg
+                self.cfg.ffmpeg_exe = ffmpeg_exe.strip()
+                self._ffmpeg_cache = None
+                found = resolve_ffmpeg(self.cfg.ffmpeg_exe)
+                self.status.log("ffmpeg: " + (f"using {found}" if found else f"{self.cfg.ffmpeg_exe or '(not set)'}: not found; video actions will fail"),
+                                level="info" if found else "warning")
             if actions is not None:
                 from .actions import validate_actions
                 try:
@@ -622,6 +636,14 @@ class Manager:
             self.save_config()
 
     # -- browsing / lookups --------------------------------------------------------
+    def _ffmpeg_found(self) -> Optional[str]:
+        """The ffmpeg video actions would use (for Settings), looked up at most every 10 s."""
+        from .video import resolve_ffmpeg
+        c = getattr(self, "_ffmpeg_cache", None)
+        if c is None or c[0] != self.cfg.ffmpeg_exe or time.time() - c[1] > 10:
+            c = self._ffmpeg_cache = (self.cfg.ffmpeg_exe, time.time(), resolve_ffmpeg(self.cfg.ffmpeg_exe))
+        return c[2]
+
     def remember_browse(self, key: str, directory: str) -> None:
         """A picker was confirmed in this folder: its next opening starts there."""
         key = str(key or "").strip()
@@ -641,6 +663,14 @@ class Manager:
         in the default. Any folder that cannot be used (missing, a file, unreadable,
         unreachable drive, garbage text) silently falls back to the user's Documents folder."""
         requested = directory
+        if not directory:
+            for cand in (self.browse_dirs.get(key) if key else None, fallback):
+                try:
+                    if cand and Path(cand).is_dir():
+                        directory = cand
+                        break
+                except (OSError, ValueError):
+                    pass
         try:
             d = Path(directory) if directory else self._default_browse_dir(kind)
             if d.is_file():
@@ -655,14 +685,6 @@ class Manager:
             except (OSError, ValueError):
                 d = Path.home()
                 listing = self._list_dir(d, kind)
-        if not directory:
-            for cand in (self.browse_dirs.get(key) if key else None, fallback):
-                try:
-                    if cand and Path(cand).is_dir():
-                        directory = cand
-                        break
-                except (OSError, ValueError):
-                    pass
         dirs, files = listing
         parent = d.parent if d.parent != d else None
         return {"dir": d.as_posix(), "parent": parent.as_posix() if parent else None, "dirs": dirs, "files": files,
@@ -796,6 +818,7 @@ class Manager:
                 "animSplit": self.cfg.anim_split, "actions": [dict(a) for a in self.cfg.actions],
                 "denoiserExe": self.cfg.denoiser_exe, "denoiserValid": _denoiser_valid(self.cfg.denoiser_exe),
                 "denoiseKeepOriginal": self.cfg.denoise_keep_original,
+                "ffmpegExe": self.cfg.ffmpeg_exe, "ffmpegFound": self._ffmpeg_found(),
                 "denoiserInstall": dict(self._denoiser_install) if self._denoiser_install else None,
                 "runSlots": [w.to_dict() for w in self.cfg.run_slots()],
             }

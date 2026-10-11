@@ -136,6 +136,8 @@ class Config:
     denoiser_exe: str = ""
     denoise_timeout_s: float = 600.0
     denoise_keep_original: bool = False  # True: write <name>_denoised.png beside the render instead of replacing it
+    # ffmpeg.exe for "Make video" actions, set by the user; empty = video actions fail with a hint
+    ffmpeg_exe: str = ""
 
     # -- derived paths -----------------------------------------------------
     def instance_dir(self, instance: str) -> Path:
