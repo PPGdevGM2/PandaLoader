@@ -685,3 +685,19 @@ def _drives() -> list:
     if os.name != "nt":
         return ["/"]
     return [f"{c}:/" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if Path(f"{c}:/").exists()]
+def documents_dir() -> Path:
+    """The user's Documents folder (Windows known folder), falling back to the home dir."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
+            # CSIDL_PERSONAL = 5 -> "My Documents", honours a relocated Documents folder
+            if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and buf.value:
+                return Path(buf.value)
+        except (OSError, AttributeError):
+            pass
+    d = Path.home() / "Documents"
+    return d if d.is_dir() else Path.home()
+
+
