@@ -195,6 +195,9 @@ class WorkerRun:
         warnings: List[str] = []
         if progress.cpu_rendered:
             warnings.append("CPU took part in the render; check the Hardware pane and -copyAppSettings")
+        used = (script_result or {}).get("frameUsed")
+        if not self.spec.frames and used is not None and int(used) != int(self.spec.frame):
+            warnings.append(f"timeline was at frame {used}, not {self.spec.frame}: the render may show the wrong pose")
 
         if not killed:
             if progress.errors:

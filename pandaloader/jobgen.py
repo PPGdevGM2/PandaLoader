@@ -136,8 +136,11 @@ def render_script(spec: JobSpec) -> str:
 
 
 def _still_lines(spec: JobSpec, target: str) -> List[str]:
-    """One image at ``spec.frame`` -> target (the original one-shot job)."""
+    """One image at ``spec.frame`` -> target (the original one-shot job). The timeline is
+    set explicitly: after a headless load it is not at the frame the scene was saved at."""
     return [
+        f"  Scene.setFrame({int(spec.frame)}); processEvents();",
+        "  R.frameUsed = Scene.getFrame();",
         f"  var res = renderTo({int(spec.frame)}, {target});",
         "  R.renderReturned = res.r;",
         "  R.t.render = now();",

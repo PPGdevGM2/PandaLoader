@@ -282,6 +282,9 @@ class Scheduler:
             self._finish(slot, scene, None, f"prepare failed: {e}", block=block)
             return
         st.update_worker(slot.name, camera=spec.camera_label, target=spec.frame_targets[0] if block else spec.target)
+        if not block:
+            st.log(f"{scene.name}: camera '{spec.camera_label}', frame {spec.frame}"
+                   + (" (as saved)" if scene.frame is None else " (fixed in the queue entry)"), worker=slot.name)
 
         def on_event(ev: str, p: Progress) -> None:
             self._on_event(slot, ev, p, block)
@@ -295,7 +298,7 @@ class Scheduler:
         self._finish(slot, scene, result, result.reason, spec, block)
 
     def _prepare(self, slot: WorkerSlot, scene: Scene, block: Optional[List[int]] = None):
-        camera = self._resolve_camera(scene)
+        camera, frame = self._resolve_camera_frame(scene)
         target = scene.target
         if self.target_dir is not None:
             target = (self.target_dir / Path(scene.target).name).as_posix()
@@ -309,26 +312,40 @@ class Scheduler:
         spec = JobSpec(
             scene_file=scene.file, target=target, camera_label=camera,
             result_file=str(base.with_suffix(".result.json")), post_loaders=scene.post_loaders,
-            image_size=scene.image_size or self.cfg.image_size, settle_wait_s=self.cfg.settle_wait_s, frame=scene.frame,
+            image_size=scene.image_size or self.cfg.image_size, settle_wait_s=self.cfg.settle_wait_s, frame=frame,
             scene_index=scene.index, label=scene.name, frames=frames, frame_targets=frame_targets,
         )
         job_path = write_job(spec, base.with_suffix(".dsa"))
         self._prune_jobs()
         return spec, job_path
 
-    def _resolve_camera(self, scene: Scene) -> str:
+    def _resolve_camera_frame(self, scene: Scene):
+        """(camera label, frame) for the job, reading the .duf once. A still renders at
+        the frame the scene was saved at unless the entry fixes one (singleFrame >= 0);
+        DAZ itself does not reliably restore the saved timeline position on load."""
         if not Path(scene.file).exists():
             raise FileNotFoundError(f"scene file missing: {scene.file}")
-        label = None
-        if scene.uses_saved_camera:
+        doc = None
+        if scene.uses_saved_camera or scene.frame is None:
             try:
-                label = dufinfo.current_camera_label(scene.file)
-            except Exception as e:
+                doc = dufinfo.load_duf(scene.file)
+            except Exception as e:  # noqa: BLE001
+                log.warning("could not read %s: %s", scene.file, e)
+        label = None
+        if scene.uses_saved_camera and doc is not None:
+            try:
+                label = dufinfo.current_camera_label(scene.file, doc)
+            except Exception as e:  # noqa: BLE001
                 log.warning("camera lookup failed for %s: %s", scene.file, e)
         label = label or scene.camera_hint
         if not label:
             raise ValueError("no camera: scene has no saved camera and no recorded camera label")
-        return label
+        frame = scene.frame
+        if frame is None:
+            if doc is None:
+                raise ValueError("cannot read the scene file for its saved timeline frame")
+            frame = int(dufinfo.anim_info(scene.file, doc).get("currentFrame", 0))
+        return label, frame
 
     def _on_event(self, slot: WorkerSlot, ev: str, p: Progress, block: Optional[List[int]] = None) -> None:
         st = self.status
@@ -374,7 +391,7 @@ class Scheduler:
         with self.qlock:
             if result is not None and result.ok:
                 secs = result.render_secs or (time.time() - (ws.render_started or ws.job_started or time.time()))
-                scene.mark_done(secs, spec.camera_label if spec else (scene.camera_hint or ""), scene.frame)
+                scene.mark_done(secs, spec.camera_label if spec else (scene.camera_hint or ""), spec.frame if spec else (scene.frame or 0))
                 self.queue.append_log(f"{slot.name}: done {scene.name} in {int(secs)} s, {int(result.iterations)} iterations -> {spec.target if spec else scene.target}")
                 ws.jobs_done += 1
                 st.log(f"done {scene.name}: {int(secs)} s render, {int(result.iterations)} it", worker=slot.name)

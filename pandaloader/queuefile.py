@@ -68,9 +68,11 @@ class Scene:
         return [p.get("asset", "") for p in self.data.get("postLoaders", []) if p.get("asset")]
 
     @property
-    def frame(self) -> int:
+    def frame(self) -> Optional[int]:
+        """The frame a still renders at: singleFrame >= 0 is a fixed frame; -1 (the plugin's
+        default) means "the frame the scene was saved at", returned as None."""
         sf = int(self.data.get("singleFrame", -1))
-        return sf if sf >= 0 else 0
+        return sf if sf >= 0 else None
 
     @property
     def name(self) -> str:
