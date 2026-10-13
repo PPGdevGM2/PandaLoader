@@ -404,8 +404,7 @@ class Manager:
             sc = self._scene(index)
             if sc.state == STATE_RUNNING:
                 raise ManagerError("scene is rendering")
-            sc.mark_pending(keep_frames=False)
-            sc.data.pop("lastError", None)
+            sc.reset_for_rerender()
             self._commit(f"reset {sc.name} to pending")
 
     def mark_done(self, index: int) -> None:
@@ -437,8 +436,7 @@ class Manager:
                 elif sc.state == STATE_RUNNING:
                     skipped += 1
                 elif action == "reset":
-                    sc.mark_pending()
-                    sc.data.pop("lastError", None)
+                    sc.reset_for_rerender()
                     done += 1
                 elif action == "done":
                     sc.state = STATE_DONE

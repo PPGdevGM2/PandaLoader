@@ -274,6 +274,15 @@ class Scene:
         if not keep_frames:
             self.data.pop("framesDone", None)
 
+    def reset_for_rerender(self) -> None:
+        """A reset by the user: render again from scratch. A render that was denoised (or
+        tried) gets the denoise request back, so the new render is denoised too and the
+        old tick does not claim it already is."""
+        self.mark_pending(keep_frames=False)
+        self.data.pop("lastError", None)
+        if self.denoised is not None:
+            self.denoise = True  # sets the request, forgets the old result
+
     def mark_done(self, secs: float, camera_label: str, frame: int = 0) -> None:
         self.state = STATE_DONE
         self.data.pop("lastError", None)
@@ -403,8 +412,11 @@ class QueueFile:
         n = 0
         for s in self.scenes:
             if s.state == STATE_FAILED or (not failed_only and s.state != STATE_PENDING):
-                s.mark_pending(keep_frames=failed_only)
-                s.data.pop("lastError", None)
+                if failed_only:
+                    s.mark_pending(keep_frames=True)  # retry: finished frames stay
+                    s.data.pop("lastError", None)
+                else:
+                    s.reset_for_rerender()
                 n += 1
         return n
 
