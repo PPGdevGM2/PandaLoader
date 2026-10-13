@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from typing import Dict, List, Optional, Tuple
 
 log = logging.getLogger("pandaloader.gpumon")
@@ -133,7 +134,7 @@ def adapter_buses() -> Dict[str, int]:
             q = QUERYADAPTERINFO(a.hAdapter, KMTQAITYPE_ADAPTERADDRESS,
                                  ctypes.cast(ctypes.byref(addr), ctypes.c_void_p), ctypes.sizeof(addr))
             st = gdi32.D3DKMTQueryAdapterInfo(ctypes.byref(q)) & 0xFFFFFFFF
-            luid = f"0x{a.AdapterLuid.HighPart & 0xFFFFFFFF:08x}_0x{a.AdapterLuid.LowPart:08x}"
+            luid = f"0x{a.AdapterLuid.HighPart & 0xFFFFFFFF:08x}_0x{a.AdapterLuid.LowPart:08x}"  # lower case, see sample()
             if st == 0 and addr.BusNumber != 0xFFFFFFFF:
                 out[luid] = addr.BusNumber
             gdi32.D3DKMTCloseAdapter(ctypes.byref(CLOSEADAPTER(a.hAdapter)))
@@ -204,7 +205,9 @@ class EngineCounters:
                     continue
                 m = self._RX.search(it.szName or "")
                 if m and it.FmtValue.doubleValue > 0:
-                    agg[m.group(1)][m.group(2)] += it.FmtValue.doubleValue
+                    # Counter names spell the LUID in upper case (0x0001112D), adapter_buses() in
+                    # lower case: compare in lower case, or LUIDs with hex letters never match.
+                    agg[m.group(1).lower()][m.group(2)] += it.FmtValue.doubleValue
             return {luid: {k: min(100.0, v) for k, v in eng.items()} for luid, eng in agg.items()}
         except Exception:  # noqa: BLE001
             log.debug("PDH sample failed", exc_info=True)
@@ -245,12 +248,17 @@ class GpuMonitor:
 
     def _loop(self) -> None:
         self._engines = EngineCounters()
-        self._luid_to_bus = adapter_buses()
+        self._luid_to_bus, self._luid_checked = adapter_buses(), time.time()
         while not self._stop.is_set():
             gpus = query_nvidia_smi()
             if self._engines.ok and gpus:
                 by_bus: Dict[int, Dict[str, float]] = {}
-                for luid, eng in self._engines.sample().items():
+                sample = self._engines.sample()
+                # LUIDs change on a driver reset: look them up again, at most once a minute
+                # (a virtual adapter without a PCI bus is never in the table)
+                if any(luid not in self._luid_to_bus for luid in sample) and time.time() - self._luid_checked > 60:
+                    self._luid_to_bus, self._luid_checked = adapter_buses(), time.time()
+                for luid, eng in sample.items():
                     bus = self._luid_to_bus.get(luid)
                     if bus is not None:
                         by_bus[bus] = eng
