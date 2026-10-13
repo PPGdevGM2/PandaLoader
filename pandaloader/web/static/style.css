@@ -95,7 +95,9 @@ input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); bo
 .worker .stats b { color: var(--text); font-weight: 500; }
 .worker .err { color: var(--err); font-size: 12px; margin-top: 4px; }
 .worker .body { display: flex; gap: 12px; align-items: stretch; }
-.worker .body .main { flex: 1; min-width: 0; }
+/* display/padding reset: the page layout's generic .main rule (a padded flex row) must not
+   apply to the card's column, or scene, bar and stats end up side by side and the bar is 0 wide */
+.worker .body .main { flex: 1; min-width: 0; display: block; padding: 0; min-height: auto; }
 .worker .gtoggle { background: none; border: none; padding: 0 2px; margin-left: 8px; color: var(--muted); font-size: 14px; line-height: 1; }
 .worker .gtoggle:hover { color: var(--text); }
 .gauges { display: flex; gap: 10px; flex: none; }
